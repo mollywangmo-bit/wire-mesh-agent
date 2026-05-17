@@ -1,0 +1,9 @@
+{
+  "crons": [
+    {
+      "path": "/run",
+      "schedule": "0 0 * * 1",
+      "method": "POST"
+    }
+  ]
+}
