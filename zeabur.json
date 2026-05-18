@@ -1,5 +1,5 @@
 {
-  "crons": [
+  "cron": [
     {
       "path": "/run",
       "schedule": "0 0 * * 1",
