@@ -192,6 +192,14 @@ MONITOR_MANIFEST = {
         {"name": "JEC World", "type": "展会", "sources": ["Bing News"]},
         {"name": "安平国际丝网博览会", "type": "展会", "sources": ["Bing News"]},
     ],
+    "日本产业链": [
+        {"name": "Asada Mesh", "type": "企业", "sources": ["URL", "Bing News"]},
+        {"name": "日本精線 (Nippon Seisen)", "type": "企业", "sources": ["URL", "Bing News"]},
+        {"name": "津田駒 (Tsudakoma)", "type": "企业", "sources": ["URL", "Bing News"]},
+        {"name": "豊田自動織機 (Toyota Industries)", "type": "企业", "sources": ["Bing News"]},
+        {"name": "鋼筘・ヘルド・綜絖 繊維資材産業", "type": "行业", "sources": ["Bing News"]},
+        {"name": "日本金網産業", "type": "行业", "sources": ["Bing News"]},
+    ],
 }
 
 # ============================================================
@@ -216,12 +224,15 @@ KEYWORD_SCAN_GROUPS = [
     ("国防科技", ["路障车 防暴 路障", "智能护栏 主动防护", "军事 伪装网 隐蔽", "军事 防爆网 爆炸防护"]),
     ("农林渔业", ["养猪网 畜牧 围栏", "海水 养殖网 渔业 网箱", "苗床网 育苗 园艺", "牛栏网 牧场 围栏"]),
     ("其他", ["铜网 紫铜 黄铜", "音网 网罩 音响", "稀有金属网 贵金属网", "银网 镍网 钨网", "服饰 网布 服装 金属网眼", "体育 用网 球网 运动防护"]),
+    ("日本产业链", ["浅田メッシュ 精密 金網", "日本精線 ステンレス 鋼線", "津田駒 織機 最新技術", "鋼筘 綜絖 ヘルド", "Asada Mesh Japan", "Tsudakoma loom"]),
 ]
 
 # 所有被监测的 URL
 URL_MONITOR_LIST = [
     {"url": "https://www.schlattergroup.com/en/wire-weaving", "name": "Schlatter Wire Weaving", "category": "设备"},
     {"url": "https://www.asada-mesh.co.jp/",               "name": "Asada Mesh",            "category": "丝材料"},
+    {"url": "https://www.nipponseisen.co.jp/",             "name": "日本精線",              "category": "日本产业链"},
+    {"url": "https://www.tsudakoma.co.jp/",                "name": "津田駒",                "category": "日本产业链"},
     {"url": "https://www.mysteel.com/",                    "name": "Mysteel 我的钢铁",      "category": "原材料"},
     {"url": "https://www.smm.cn/",                         "name": "SMM 上海有色网",        "category": "原材料"},
     {"url": "https://www.technicaltextile.net/",           "name": "Technical Textile",     "category": "丝材料"},
@@ -342,6 +353,16 @@ BING_NEWS_QUERIES = [
     ("稀有金属网 银网 镍网 钨网", "其他特种"),
     ("服饰 网布 胸花 金属 网眼 服装", "其他特种"),
     ("体育 用网 球网 防护 运动 器材", "其他特种"),
+
+    # 日本产业链
+    ("浅田メッシュ 金網 精密 織機 製造", "日本产业链"),
+    ("日本精線 ステンレス 極細線 金網", "日本产业链"),
+    ("津田駒 織機 最新 技術 繊維機械", "日本产业链"),
+    ("鋼筘 綜絖 ヘルド 繊維資材 製造", "日本产业链"),
+    ("Asada Mesh ultra fine wire cloth Japan", "日本产业链"),
+    ("Tsudakoma shuttleless loom technology", "日本产业链"),
+    ("Japan precision mesh filter technology industry", "日本产业链"),
+    ("Toyota Industries textile machinery 2026", "日本产业链"),
 
     # 设备
     ("Schlatter wire weaving machine technology", "设备"),
@@ -792,7 +813,7 @@ class Collector:
         ORDER = ["原材料", "丝材料", "交通设施", "建筑装饰", "环境保护", "安全防护", "土工类",
                  "汽车配件", "农林种植", "居家生活", "石油化工", "造纸印刷", "矿山开采",
                  "医疗卫生", "航空航天", "国防科技", "农林渔业", "其他特种",
-                 "应用", "设备", "产业集群", "学术", "综合", "展会", "未分类"]
+                 "应用", "设备", "产业集群", "日本产业链", "学术", "综合", "展会", "未分类"]
         sections = []
 
         for cat in ORDER:
@@ -825,9 +846,6 @@ class Collector:
                 url_str = f"\n  原文: {item.url}" if item.url and not item.url.startswith("/") else ""
                 section += f"- [{item.title}]({item.url})  [{item.source}]{url_str}\n  {item.snippet[:200]}\n"
             sections.append(section)
-
-        # 追加监测清单
-        sections.append(self.checklist.to_text())
 
         return "\n\n".join(sections) if sections else "（本周未采集到相关信息）"
 
@@ -886,7 +904,7 @@ class Collector:
             sections.append(section)
 
         header = (
-            "## 10. 关键词扫描 — 新闻列举\n\n"
+            "## 11. 关键词扫描 — 新闻列举\n\n"
             "> 以下为按产品关键词从本周采集信息中匹配的新闻条目，"
             "属于机器匹配的新闻列举，区别于以上 LLM 行业分析。\n\n"
         )

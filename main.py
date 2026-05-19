@@ -46,10 +46,14 @@ def run_once():
     analyzer = Analyzer(config)
     report = analyzer.generate_report(raw_data)
 
-    # 3b. 追加关键词扫描（第10部分）
+    # 3b. 追加关键词扫描（第11部分）
     print("\n>>> [3b] 生成关键词扫描...")
     keyword_scan = collector.generate_keyword_scan(all_results)
     report += "\n\n" + keyword_scan
+
+    # 3c. 追加监测清单（始终在最后）
+    print("\n>>> [3c] 追加监测清单...")
+    report += "\n\n" + collector.checklist.to_text()
 
     # 保存报告
     date_str = datetime.now().strftime("%Y-%m-%d")

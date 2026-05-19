@@ -130,6 +130,16 @@ class Config:
         "金属丝网织机 国产替代",
         "3D编织 复合材料 技术纺织品",
 
+        # ===== 日本产业链 =====
+        "浅田メッシュ 金網 精密 織機",
+        "日本精線 ステンレス 極細線",
+        "津田駒 織機 繊維機械 最新技術",
+        "鋼筘 綜絖 産業用繊維資材",
+        "日本 金網 業界 動向",
+        "Asada Mesh precision wire cloth Japan",
+        "Tsudakoma shuttleless loom technology",
+        "Japan precision mesh filter technology",
+
         # ===== 产业集群 =====
         "河北安平 丝网 产业升级",
         "南通 纺织机械 技术纺织",
@@ -141,6 +151,7 @@ class Config:
         "青山集团", "山东钢铁", "宝武钢铁",
         "Asada Mesh", "Schlatter", "Asagoe",
         "东方特钢", "德龙镍业",
+        "日本精線", "津田駒", "豊田自動織機",
     ])
 
 
