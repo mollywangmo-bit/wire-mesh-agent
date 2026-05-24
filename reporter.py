@@ -19,11 +19,12 @@ def _find_chinese_font() -> str:
     3. 遍历系统字体目录兜底
     """
     candidates = [
-        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
-        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-        "/System/Library/Fonts/PingFang.ttc",
+        # TrueType 优先（fpdf2 对 CFF CID 字体 subsetting 有问题会乱码）
         "/System/Library/Fonts/STHeiti Light.ttc",
         "/System/Library/Fonts/Supplemental/Songti.ttc",
+        "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/System/Library/Fonts/PingFang.ttc",  # CFF 字体，fpdf2 subsetting 不支持
     ]
     for path in candidates:
         if os.path.exists(path):
@@ -46,6 +47,17 @@ def _find_chinese_font() -> str:
 
 CHINESE_FONT_PATH = _find_chinese_font()
 CHINESE_FONT_IS_COLLECTION = CHINESE_FONT_PATH.endswith(".ttc")
+# 确定字体集合索引：不同字体的 SC(简体中文) 索引不同
+if "STHeiti" in CHINESE_FONT_PATH:
+    CHINESE_FONT_COLLECTION_IDX = 1  # Heiti SC Light
+elif "Songti" in CHINESE_FONT_PATH:
+    CHINESE_FONT_COLLECTION_IDX = 6  # Songti SC Regular
+elif "PingFang" in CHINESE_FONT_PATH:
+    CHINESE_FONT_COLLECTION_IDX = 2  # PingFang SC
+elif "Noto" in CHINESE_FONT_PATH:
+    CHINESE_FONT_COLLECTION_IDX = 1  # Noto Sans CJK SC
+else:
+    CHINESE_FONT_COLLECTION_IDX = 1
 
 
 class ReportPDF(FPDF):
@@ -55,11 +67,9 @@ class ReportPDF(FPDF):
         super().__init__()
         self.set_auto_page_break(auto=True, margin=20)
         self.add_page()
-        # 确定字体集合索引（PingFang.ttc 是集合字体，collection_font_number=2 对应 SC）
-        coll_idx = 2 if "PingFang" in CHINESE_FONT_PATH else 1
         if CHINESE_FONT_IS_COLLECTION:
-            self.add_font("Chinese", "", CHINESE_FONT_PATH, collection_font_number=coll_idx)
-            self.add_font("Chinese", "B", CHINESE_FONT_PATH, collection_font_number=coll_idx)
+            self.add_font("Chinese", "", CHINESE_FONT_PATH, collection_font_number=CHINESE_FONT_COLLECTION_IDX)
+            self.add_font("Chinese", "B", CHINESE_FONT_PATH, collection_font_number=CHINESE_FONT_COLLECTION_IDX)
         else:
             self.add_font("Chinese", "", CHINESE_FONT_PATH)
             self.add_font("Chinese", "B", CHINESE_FONT_PATH)
@@ -77,10 +87,49 @@ class ReportPDF(FPDF):
         """[text](url) → text"""
         return re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", text)
 
+    @staticmethod
+    def _sanitize_text(text: str) -> str:
+        """清除 PDF 字体不支持的字符，避免乱码
+
+        PingFang SC 支持：中/日/韩/拉丁字符，不支持 emoji 和非常用 Unicode 区块
+        """
+        # 先替换已知 emoji / 特殊字符为纯文本
+        text = text.replace("✅", "[OK]").replace("❌", "[--]").replace("⏳", "[..]").replace("⚠️", "[!]")
+        text = text.replace("🔗", "[直接相关]").replace("⚡", "[间接影响]").replace("📡", "[趋势信号]")
+        text = text.replace("�", "?").replace("‌", "").replace("‍", "")
+
+        # 删除字体无法渲染的字符（保留 PingFang SC 支持的区块）
+        safe_chars = []
+        for ch in text:
+            cp = ord(ch)
+            if cp < 128:  # ASCII
+                safe_chars.append(ch)
+            elif 0x3000 <= cp <= 0x303F:  # CJK 符号/标点
+                safe_chars.append(ch)
+            elif 0x3040 <= cp <= 0x30FF:  # 日文假名
+                safe_chars.append(ch)
+            elif 0x3300 <= cp <= 0x33FF:  # CJK 兼容（㍉㌔等）
+                safe_chars.append(ch)
+            elif 0x4E00 <= cp <= 0x9FFF:  # CJK 统一表意文字
+                safe_chars.append(ch)
+            elif 0xFF00 <= cp <= 0xFFEF:  # 全角/半角形式
+                safe_chars.append(ch)
+            elif 0x2000 <= cp <= 0x206F:  # 通用标点
+                safe_chars.append(ch)
+            elif 0x2100 <= cp <= 0x214F:  # 字母符号
+                safe_chars.append(ch)
+            elif 0x3400 <= cp <= 0x4DBF:  # CJK 扩展 A
+                safe_chars.append(ch)
+            elif 0x20A0 <= cp <= 0x20CF:  # 货币符号
+                safe_chars.append(ch)
+            elif 0x2150 <= cp <= 0x218F:  # 数字形式
+                safe_chars.append(ch)
+            # else: 丢弃（emoji、西里尔字母等乱码字符）
+        return "".join(safe_chars)
+
     def render_markdown(self, md_text: str):
         """渲染 Markdown 文本为 PDF"""
-        # 替换 emoji 为文本
-        md_text = md_text.replace("✅", "[OK]").replace("❌", "[--]").replace("⏳", "[..]").replace("⚠️", "[!]")
+        md_text = self._sanitize_text(md_text)
         lines = md_text.split("\n")
         in_table = False
 

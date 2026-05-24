@@ -30,6 +30,7 @@ class Config:
 
     # Search
     serpapi_api_key: Optional[str] = None
+    serper_api_key: Optional[str] = None  # Serper.dev Google News API
 
     # Wechat2RSS（公众号 RSS）
     wechat2rss_url: Optional[str] = None
@@ -140,6 +141,38 @@ class Config:
         "Tsudakoma shuttleless loom technology",
         "Japan precision mesh filter technology",
 
+        # ===== 日本精密金属网公司 =====
+        "NBC Meshtec 精密 金属 メッシュ",
+        "奥谷金網 パンチングメタル フィルター",
+        "関西金網 Nippon Filcon 産業用メッシュ",
+        "大日金属 金網 精密 織物",
+        "阪倉金網 極細線 メッシュ",
+        "八尾金網 フィルター メッシュ",
+        "松本金網 Matsubara 金網 特殊織",
+        "ニチダイ 焼結 金属 フィルター sintered mesh",
+        "島精機 編機 ホールガーメント 複合材料",
+        "村田機械 3D織り 繊維機械",
+        "大洋金網 石油化学 フィルター",
+        "三和工業 金網 大阪",
+
+        # ===== 美国丝网公司 =====
+        "Gerard Daniel wire mesh filtration North America",
+        "W.S. Tyler wire cloth industrial sieve",
+        "Newark Wire Cloth filter strainer",
+        "Cleveland Wire Cloth industrial mesh",
+        "Belleville Wire Cloth aerospace wire mesh",
+        "Cambridge International metal conveyor belt wire mesh",
+        "Sefar precision woven filtration",
+
+        # ===== 欧洲丝网公司 =====
+        "GKD Kufferath technical woven wire mesh Germany",
+        "G. Bopp precision wire cloth Switzerland",
+        "Haver Boecker wire weaving screening Germany",
+        "Dorstener Drahtwerke sintered wire mesh Germany",
+        "Russell Finex sieving filtration UK",
+        "Locker Group wire mesh UK",
+        "Spörl KG stainless steel wire mesh Germany",
+
         # ===== 产业集群 =====
         "河北安平 丝网 产业升级",
         "南通 纺织机械 技术纺织",
@@ -148,10 +181,43 @@ class Config:
 
     # 要重点关注的公司/机构
     key_entities: list[str] = field(default_factory=lambda: [
+        # === 中国 ===
         "青山集团", "山东钢铁", "宝武钢铁",
-        "Asada Mesh", "Schlatter", "Asagoe",
         "东方特钢", "德龙镍业",
+
+        # === 日本 ===
+        "Asada Mesh", "Schlatter", "Asagoe",
         "日本精線", "津田駒", "豊田自動織機",
+        "NBC Meshtec", "奥谷金網製作所", "Okutani",
+        "Nippon Filcon", "関西金網",
+        "Dainichi Kinzoku", "大日金属",
+        "YOSHIDA KINZOKU KOGYO", "吉田金属工業",
+        "阪倉金網", "Sakakura Wire Mesh",
+        "八尾金網製作所", "Yao Wire Mesh",
+        "松本金網", "Matsubara Kanaami",
+        "ニチダイフィルタ", "Nichidai Filter",
+        "島精機製作所", "Shima Seiki",
+        "村田機械", "Murata Machinery",
+        "大洋金網", "Taiyo Wire Cloth",
+        "三和工業", "Mitsuwa Industries",
+
+        # === 美国 ===
+        "Gerard Daniel Worldwide",
+        "W.S. Tyler",
+        "Newark Wire Cloth",
+        "Cleveland Wire Cloth",
+        "Belleville Wire Cloth",
+        "Cambridge International",
+        "Sefar",
+
+        # === 欧洲 ===
+        "GKD Gebr. Kufferath",
+        "G. Bopp",
+        "Haver & Boecker",
+        "Dorstener Drahtwerke",
+        "Russell Finex",
+        "Locker Group",
+        "Spörl KG",
     ])
 
 
@@ -179,6 +245,7 @@ def load_config() -> Config:
         wecom_webhook_url=os.getenv("WECOM_WEBHOOK_URL"),
 
         serpapi_api_key=os.getenv("SERPAPI_API_KEY"),
+        serper_api_key=os.getenv("SERPER_API_KEY"),
 
         wechat2rss_url=os.getenv("WECHAT2RSS_URL"),
         wechat2rss_token=os.getenv("WECHAT2RSS_TOKEN"),

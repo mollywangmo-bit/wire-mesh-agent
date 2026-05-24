@@ -2,14 +2,17 @@
 丝网行业研究 Agent - 数据采集模块
 
 混合策略：
-1. Bing News — 中英文新闻精准搜索（含深度抓取）
+1. Serper (Google) + Bing Web — 多语言新闻搜索（含深度抓取）
 2. URL Monitor — 固定网站内容监控
 3. RSS/微信公众号订阅
 """
 import time
 import re
+import random
+import threading
 from datetime import datetime
 from typing import Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from urllib.parse import urlparse
 
 import httpx
@@ -31,12 +34,12 @@ MONITOR_MANIFEST = {
         {"name": "青山实业", "type": "公众号", "sources": ["Wechat2RSS"]},
         {"name": "我要不锈钢", "type": "公众号", "sources": ["Wechat2RSS"]},
         {"name": "长江有色金属网", "type": "公众号", "sources": ["Wechat2RSS"]},
-        {"name": "国际镍协会", "type": "公众号", "sources": ["Bing News（话题覆盖）", "Wechat2RSS"]},
-        {"name": "钢研华普", "type": "公众号", "sources": ["Bing News（话题覆盖）", "Wechat2RSS"]},
-        {"name": "青山集团 (Tsingshan Group)", "type": "企业", "sources": ["Bing News"]},
-        {"name": "宝武钢铁", "type": "企业", "sources": ["Bing News"]},
-        {"name": "德龙镍业", "type": "企业", "sources": ["Bing News"]},
-        {"name": "东方特钢", "type": "企业", "sources": ["Bing News"]},
+        {"name": "国际镍协会", "type": "公众号", "sources": ["Bing Web（话题覆盖）", "Wechat2RSS"]},
+        {"name": "钢研华普", "type": "公众号", "sources": ["Bing Web（话题覆盖）", "Wechat2RSS"]},
+        {"name": "青山集团 (Tsingshan Group)", "type": "企业", "sources": ["Bing Web"]},
+        {"name": "宝武钢铁", "type": "企业", "sources": ["Bing Web"]},
+        {"name": "德龙镍业", "type": "企业", "sources": ["Bing Web"]},
+        {"name": "东方特钢", "type": "企业", "sources": ["Bing Web"]},
     ],
     "丝材料创新": [
         {"name": "纺织导报", "type": "公众号", "sources": ["Wechat2RSS"]},
@@ -47,8 +50,8 @@ MONITOR_MANIFEST = {
         {"name": "材料科学与工程", "type": "公众号", "sources": ["Wechat2RSS"]},
         {"name": "易丝帮", "type": "公众号", "sources": ["Wechat2RSS"]},
         {"name": "Advanced Fiber Materials", "type": "公众号", "sources": ["Wechat2RSS"]},
-        {"name": "中国玻璃纤维工业协会", "type": "公众号", "sources": ["Bing News（话题覆盖）", "Wechat2RSS"]},
-        {"name": "生物医用纺织材料", "type": "公众号", "sources": ["Bing News（话题覆盖）", "Wechat2RSS"]},
+        {"name": "中国玻璃纤维工业协会", "type": "公众号", "sources": ["Bing Web（话题覆盖）", "Wechat2RSS"]},
+        {"name": "生物医用纺织材料", "type": "公众号", "sources": ["Bing Web（话题覆盖）", "Wechat2RSS"]},
     ],
     "应用领域": [
         {"name": "过滤与分离", "type": "公众号", "sources": ["Wechat2RSS"]},
@@ -64,87 +67,87 @@ MONITOR_MANIFEST = {
         {"name": "微创医疗", "type": "公众号", "sources": ["Wechat2RSS"]},
         {"name": "乐普医疗", "type": "公众号", "sources": ["Wechat2RSS"]},
         {"name": "心脉医疗", "type": "公众号", "sources": ["Wechat2RSS"]},
-        {"name": "建筑工业化", "type": "公众号", "sources": ["Bing News（话题覆盖）", "Wechat2RSS"]},
+        {"name": "建筑工业化", "type": "公众号", "sources": ["Bing Web（话题覆盖）", "Wechat2RSS"]},
     ],
     "交通设施": [
-        {"name": "声屏障 护栏网 行业", "type": "行业", "sources": ["Bing News"]},
-        {"name": "波形护栏板 防眩网 市场", "type": "行业", "sources": ["Bing News"]},
-        {"name": "中国公路学会", "type": "公众号", "sources": ["Bing News（话题覆盖）"]},
+        {"name": "声屏障 护栏网 行业", "type": "行业", "sources": ["Bing Web"]},
+        {"name": "波形护栏板 防眩网 市场", "type": "行业", "sources": ["Bing Web"]},
+        {"name": "中国公路学会", "type": "公众号", "sources": ["Bing Web（话题覆盖）"]},
     ],
     "建筑装饰": [
-        {"name": "金刚网 钢筋网 行业", "type": "行业", "sources": ["Bing News"]},
-        {"name": "钢板网 冲孔网 电焊网", "type": "行业", "sources": ["Bing News"]},
-        {"name": "中国建筑装饰协会", "type": "公众号", "sources": ["Bing News（话题覆盖）"]},
+        {"name": "金刚网 钢筋网 行业", "type": "行业", "sources": ["Bing Web"]},
+        {"name": "钢板网 冲孔网 电焊网", "type": "行业", "sources": ["Bing Web"]},
+        {"name": "中国建筑装饰协会", "type": "公众号", "sources": ["Bing Web（话题覆盖）"]},
     ],
     "环境保护": [
-        {"name": "中国环保产业协会", "type": "公众号", "sources": ["Bing News（话题覆盖）"]},
-        {"name": "过滤器 丝网过滤 行业", "type": "行业", "sources": ["Bing News"]},
-        {"name": "防风固沙网 环保工程", "type": "行业", "sources": ["Bing News"]},
+        {"name": "中国环保产业协会", "type": "公众号", "sources": ["Bing Web（话题覆盖）"]},
+        {"name": "过滤器 丝网过滤 行业", "type": "行业", "sources": ["Bing Web"]},
+        {"name": "防风固沙网 环保工程", "type": "行业", "sources": ["Bing Web"]},
     ],
     "安全防护": [
-        {"name": "刀片刺绳 刺绳 行业", "type": "行业", "sources": ["Bing News"]},
-        {"name": "防攀爬网 边坡防护网", "type": "行业", "sources": ["Bing News"]},
-        {"name": "建筑安全网 爬架网 环形网", "type": "行业", "sources": ["Bing News"]},
+        {"name": "刀片刺绳 刺绳 行业", "type": "行业", "sources": ["Bing Web"]},
+        {"name": "防攀爬网 边坡防护网", "type": "行业", "sources": ["Bing Web"]},
+        {"name": "建筑安全网 爬架网 环形网", "type": "行业", "sources": ["Bing Web"]},
     ],
     "土工类": [
-        {"name": "石笼网 格宾网 行业", "type": "行业", "sources": ["Bing News"]},
-        {"name": "土工格栅 土工布 人造草坪", "type": "行业", "sources": ["Bing News"]},
-        {"name": "中国土工合成材料工程协会", "type": "公众号", "sources": ["Bing News（话题覆盖）"]},
+        {"name": "石笼网 格宾网 行业", "type": "行业", "sources": ["Bing Web"]},
+        {"name": "土工格栅 土工布 人造草坪", "type": "行业", "sources": ["Bing Web"]},
+        {"name": "中国土工合成材料工程协会", "type": "公众号", "sources": ["Bing Web（话题覆盖）"]},
     ],
     "汽车配件": [
-        {"name": "汽车滤清器 滤网 行业", "type": "行业", "sources": ["Bing News"]},
-        {"name": "汽车消声器 水箱防护网", "type": "行业", "sources": ["Bing News"]},
-        {"name": "汽车中网护网 改装", "type": "行业", "sources": ["Bing News"]},
+        {"name": "汽车滤清器 滤网 行业", "type": "行业", "sources": ["Bing Web"]},
+        {"name": "汽车消声器 水箱防护网", "type": "行业", "sources": ["Bing Web"]},
+        {"name": "汽车中网护网 改装", "type": "行业", "sources": ["Bing Web"]},
     ],
     "农林种植": [
-        {"name": "防雹网 防虫网 农业", "type": "行业", "sources": ["Bing News"]},
-        {"name": "中国农技推广", "type": "公众号", "sources": ["Bing News（话题覆盖）"]},
+        {"name": "防雹网 防虫网 农业", "type": "行业", "sources": ["Bing Web"]},
+        {"name": "中国农技推广", "type": "公众号", "sources": ["Bing Web（话题覆盖）"]},
     ],
     "居家生活": [
-        {"name": "净水器过滤网 空气净化器过滤网", "type": "行业", "sources": ["Bing News"]},
-        {"name": "遮阳网 隐形纱窗 行业", "type": "行业", "sources": ["Bing News"]},
-        {"name": "丝网工艺品 烧烤网 仓储笼", "type": "行业", "sources": ["Bing News"]},
-        {"name": "宠物用网 筐篮 行业", "type": "行业", "sources": ["Bing News"]},
+        {"name": "净水器过滤网 空气净化器过滤网", "type": "行业", "sources": ["Bing Web"]},
+        {"name": "遮阳网 隐形纱窗 行业", "type": "行业", "sources": ["Bing Web"]},
+        {"name": "丝网工艺品 烧烤网 仓储笼", "type": "行业", "sources": ["Bing Web"]},
+        {"name": "宠物用网 筐篮 行业", "type": "行业", "sources": ["Bing Web"]},
     ],
     "石油化工": [
-        {"name": "钢格板 复合网 行业", "type": "行业", "sources": ["Bing News"]},
-        {"name": "丝网除沫器 石油防砂管", "type": "行业", "sources": ["Bing News"]},
-        {"name": "防爆网墙 填料网 席型网 密纹网", "type": "行业", "sources": ["Bing News"]},
-        {"name": "中国石油和化工工业联合会", "type": "公众号", "sources": ["Bing News（话题覆盖）"]},
+        {"name": "钢格板 复合网 行业", "type": "行业", "sources": ["Bing Web"]},
+        {"name": "丝网除沫器 石油防砂管", "type": "行业", "sources": ["Bing Web"]},
+        {"name": "防爆网墙 填料网 席型网 密纹网", "type": "行业", "sources": ["Bing Web"]},
+        {"name": "中国石油和化工工业联合会", "type": "公众号", "sources": ["Bing Web（话题覆盖）"]},
     ],
     "造纸印刷": [
-        {"name": "造纸网 行业", "type": "行业", "sources": ["Bing News"]},
-        {"name": "印刷网 丝印 行业", "type": "行业", "sources": ["Bing News"]},
-        {"name": "中国造纸协会", "type": "公众号", "sources": ["Bing News（话题覆盖）"]},
+        {"name": "造纸网 行业", "type": "行业", "sources": ["Bing Web"]},
+        {"name": "印刷网 丝印 行业", "type": "行业", "sources": ["Bing Web"]},
+        {"name": "中国造纸协会", "type": "公众号", "sources": ["Bing Web（话题覆盖）"]},
     ],
     "矿山开采": [
-        {"name": "矿用筛 振动筛网 行业", "type": "行业", "sources": ["Bing News"]},
-        {"name": "矿井支护网 矿山安全", "type": "行业", "sources": ["Bing News"]},
+        {"name": "矿用筛 振动筛网 行业", "type": "行业", "sources": ["Bing Web"]},
+        {"name": "矿井支护网 矿山安全", "type": "行业", "sources": ["Bing Web"]},
         {"name": "新乡振动筛分过滤产业博览会", "type": "公众号", "sources": ["Wechat2RSS"]},
     ],
     "医疗卫生": [
-        {"name": "口罩丝 医疗新风过滤", "type": "行业", "sources": ["Bing News"]},
-        {"name": "分样筛 蚀刻网 医疗器械", "type": "行业", "sources": ["Bing News"]},
-        {"name": "血管密网支架 介入器械", "type": "行业", "sources": ["Bing News"]},
+        {"name": "口罩丝 医疗新风过滤", "type": "行业", "sources": ["Bing Web"]},
+        {"name": "分样筛 蚀刻网 医疗器械", "type": "行业", "sources": ["Bing Web"]},
+        {"name": "血管密网支架 介入器械", "type": "行业", "sources": ["Bing Web"]},
         {"name": "医疗器械创新网", "type": "公众号", "sources": ["Wechat2RSS"]},
     ],
     "航空航天": [
-        {"name": "烧结网 烧结毡 过滤", "type": "行业", "sources": ["Bing News"]},
-        {"name": "金属丝网 航空燃料过滤器", "type": "行业", "sources": ["Bing News"]},
+        {"name": "烧结网 烧结毡 过滤", "type": "行业", "sources": ["Bing Web"]},
+        {"name": "金属丝网 航空燃料过滤器", "type": "行业", "sources": ["Bing Web"]},
         {"name": "航空航天制造技术", "type": "公众号", "sources": ["Wechat2RSS"]},
     ],
     "国防科技": [
-        {"name": "路障车 智能护栏 军事", "type": "行业", "sources": ["Bing News"]},
-        {"name": "军事伪装网 军事防爆网", "type": "行业", "sources": ["Bing News"]},
-        {"name": "国防科技工业", "type": "公众号", "sources": ["Bing News（话题覆盖）"]},
+        {"name": "路障车 智能护栏 军事", "type": "行业", "sources": ["Bing Web"]},
+        {"name": "军事伪装网 军事防爆网", "type": "行业", "sources": ["Bing Web"]},
+        {"name": "国防科技工业", "type": "公众号", "sources": ["Bing Web（话题覆盖）"]},
     ],
     "农林渔业": [
-        {"name": "养猪网 海水养殖网 行业", "type": "行业", "sources": ["Bing News"]},
-        {"name": "苗床网 牛栏网 农业设施", "type": "行业", "sources": ["Bing News"]},
+        {"name": "养猪网 海水养殖网 行业", "type": "行业", "sources": ["Bing Web"]},
+        {"name": "苗床网 牛栏网 农业设施", "type": "行业", "sources": ["Bing Web"]},
     ],
     "其他特种丝网": [
-        {"name": "铜网 音网 稀有金属网", "type": "行业", "sources": ["Bing News"]},
-        {"name": "服饰用网 胸花 体育用网", "type": "行业", "sources": ["Bing News"]},
+        {"name": "铜网 音网 稀有金属网", "type": "行业", "sources": ["Bing Web"]},
+        {"name": "服饰用网 胸花 体育用网", "type": "行业", "sources": ["Bing Web"]},
     ],
     "织机与装备": [
         {"name": "纺织机械", "type": "公众号", "sources": ["Wechat2RSS"]},
@@ -155,23 +158,23 @@ MONITOR_MANIFEST = {
         {"name": "中国纺机协会", "type": "公众号", "sources": ["Wechat2RSS"]},
         {"name": "纺织机械60s", "type": "公众号", "sources": ["Wechat2RSS"]},
         {"name": "丝印电子印刷技术学习研究会", "type": "公众号", "sources": ["Wechat2RSS"]},
-        {"name": "织造印染产业大脑", "type": "公众号", "sources": ["Bing News（话题覆盖）", "Wechat2RSS"]},
-        {"name": "Schlatter Group", "type": "企业", "sources": ["URL: schlattergroup.com", "Bing News"]},
+        {"name": "织造印染产业大脑", "type": "公众号", "sources": ["Bing Web（话题覆盖）", "Wechat2RSS"]},
+        {"name": "Schlatter Group", "type": "企业", "sources": ["URL: schlattergroup.com", "Bing Web"]},
     ],
     "产业集群区域": [
         {"name": "南通发布", "type": "公众号", "sources": ["Wechat2RSS"]},
         {"name": "常州发布", "type": "公众号", "sources": ["Wechat2RSS"]},
         {"name": "浙江经信", "type": "公众号", "sources": ["Wechat2RSS"]},
         {"name": "苏州工信", "type": "公众号", "sources": ["Wechat2RSS"]},
-        {"name": "吾爱盛泽", "type": "公众号", "sources": ["Bing News（话题覆盖）", "Wechat2RSS"]},
-        {"name": "新乡振动行业协会", "type": "公众号", "sources": ["Bing News（话题覆盖）", "Wechat2RSS"]},
-        {"name": "河北安平 — 丝网之都", "type": "集群", "sources": ["Bing News"]},
+        {"name": "吾爱盛泽", "type": "公众号", "sources": ["Bing Web（话题覆盖）", "Wechat2RSS"]},
+        {"name": "新乡振动行业协会", "type": "公众号", "sources": ["Bing Web（话题覆盖）", "Wechat2RSS"]},
+        {"name": "河北安平 — 丝网之都", "type": "集群", "sources": ["Bing Web"]},
     ],
     "学术与研究": [
         {"name": "知社学术圈", "type": "公众号", "sources": ["Wechat2RSS"]},
-        {"name": "环球科学科研圈", "type": "公众号", "sources": ["Bing News（话题覆盖）", "Wechat2RSS"]},
-        {"name": "中国科学报", "type": "公众号", "sources": ["Bing News（话题覆盖）", "Wechat2RSS"]},
-        {"name": "机经网", "type": "公众号", "sources": ["Bing News（话题覆盖）", "Wechat2RSS"]},
+        {"name": "环球科学科研圈", "type": "公众号", "sources": ["Bing Web（话题覆盖）", "Wechat2RSS"]},
+        {"name": "中国科学报", "type": "公众号", "sources": ["Bing Web（话题覆盖）", "Wechat2RSS"]},
+        {"name": "机经网", "type": "公众号", "sources": ["Bing Web（话题覆盖）", "Wechat2RSS"]},
         {"name": "先进制造业", "type": "公众号", "sources": ["Wechat2RSS"]},
     ],
     "全球展会与活动": [
@@ -180,25 +183,59 @@ MONITOR_MANIFEST = {
         {"name": "中外会展", "type": "公众号", "sources": ["Wechat2RSS"]},
         {"name": "亚洲过滤与分离工业展览会", "type": "公众号", "sources": ["Wechat2RSS"]},
         {"name": "CMEF中国国际医疗器械博览会", "type": "公众号", "sources": ["Wechat2RSS"]},
-        {"name": "慕尼黑展览", "type": "公众号", "sources": ["Bing News（话题覆盖）", "Wechat2RSS"]},
-        {"name": "中国会展", "type": "公众号", "sources": ["Bing News（话题覆盖）", "Wechat2RSS"]},
-        {"name": "国际纺织机械展览会", "type": "公众号", "sources": ["Bing News（话题覆盖）", "Wechat2RSS"]},
-        {"name": "广东省缝制设备商会", "type": "公众号", "sources": ["Bing News（话题覆盖）", "Wechat2RSS"]},
-        {"name": "上海国际纺织工业展", "type": "公众号", "sources": ["Bing News（话题覆盖）", "Wechat2RSS"]},
-        {"name": "新乡振动筛分过滤产业博览会", "type": "公众号", "sources": ["Bing News（话题覆盖）", "Wechat2RSS"]},
-        {"name": "科隆国际五金博览会", "type": "公众号", "sources": ["Bing News（话题覆盖）", "Wechat2RSS"]},
-        {"name": "IFAT Munich", "type": "展会", "sources": ["Bing News"]},
-        {"name": "Techtextil", "type": "展会", "sources": ["Bing News"]},
-        {"name": "JEC World", "type": "展会", "sources": ["Bing News"]},
-        {"name": "安平国际丝网博览会", "type": "展会", "sources": ["Bing News"]},
+        {"name": "慕尼黑展览", "type": "公众号", "sources": ["Bing Web（话题覆盖）", "Wechat2RSS"]},
+        {"name": "中国会展", "type": "公众号", "sources": ["Bing Web（话题覆盖）", "Wechat2RSS"]},
+        {"name": "国际纺织机械展览会", "type": "公众号", "sources": ["Bing Web（话题覆盖）", "Wechat2RSS"]},
+        {"name": "广东省缝制设备商会", "type": "公众号", "sources": ["Bing Web（话题覆盖）", "Wechat2RSS"]},
+        {"name": "上海国际纺织工业展", "type": "公众号", "sources": ["Bing Web（话题覆盖）", "Wechat2RSS"]},
+        {"name": "新乡振动筛分过滤产业博览会", "type": "公众号", "sources": ["Bing Web（话题覆盖）", "Wechat2RSS"]},
+        {"name": "科隆国际五金博览会", "type": "公众号", "sources": ["Bing Web（话题覆盖）", "Wechat2RSS"]},
+        {"name": "IFAT Munich", "type": "展会", "sources": ["Bing Web"]},
+        {"name": "Techtextil", "type": "展会", "sources": ["Bing Web"]},
+        {"name": "JEC World", "type": "展会", "sources": ["Bing Web"]},
+        {"name": "安平国际丝网博览会", "type": "展会", "sources": ["Bing Web"]},
     ],
     "日本产业链": [
-        {"name": "Asada Mesh", "type": "企业", "sources": ["URL", "Bing News"]},
-        {"name": "日本精線 (Nippon Seisen)", "type": "企业", "sources": ["URL", "Bing News"]},
-        {"name": "津田駒 (Tsudakoma)", "type": "企业", "sources": ["URL", "Bing News"]},
-        {"name": "豊田自動織機 (Toyota Industries)", "type": "企业", "sources": ["Bing News"]},
-        {"name": "鋼筘・ヘルド・綜絖 繊維資材産業", "type": "行业", "sources": ["Bing News"]},
-        {"name": "日本金網産業", "type": "行业", "sources": ["Bing News"]},
+        {"name": "Asada Mesh", "type": "企业", "sources": ["URL", "Serper (Google)"]},
+        {"name": "日本精線 (Nippon Seisen)", "type": "企业", "sources": ["URL", "Serper (Google)"]},
+        {"name": "津田駒 (Tsudakoma)", "type": "企业", "sources": ["URL", "Serper (Google)"]},
+        {"name": "豊田自動織機 (Toyota Industries)", "type": "企业", "sources": ["Serper (Google)"]},
+        {"name": "鋼筘・ヘルド・綜絖 繊維資材産業", "type": "行业", "sources": ["Serper (Google)"]},
+        {"name": "日本金網産業", "type": "行业", "sources": ["Serper (Google)"]},
+
+        # 新增强力日本企业
+        {"name": "NBC Meshtec", "type": "企业", "sources": ["URL", "Serper (Google)"]},
+        {"name": "奥谷金網製作所 (Okutani)", "type": "企业", "sources": ["URL", "Serper (Google)"]},
+        {"name": "Nippon Filcon (関西金網)", "type": "企业", "sources": ["Serper (Google)"]},
+        {"name": "大日金属 (Dainichi Kinzoku)", "type": "企业", "sources": ["Serper (Google)"]},
+        {"name": "吉田金属工業 (Yoshida Kinzoku)", "type": "企业", "sources": ["Serper (Google)"]},
+        {"name": "阪倉金網 (Sakakura Wire Mesh)", "type": "企业", "sources": ["URL", "Serper (Google)"]},
+        {"name": "八尾金網製作所 (Yao Wire Mesh)", "type": "企业", "sources": ["Serper (Google)"]},
+        {"name": "松本金網 (Matsubara Kanaami)", "type": "企业", "sources": ["URL", "Serper (Google)"]},
+        {"name": "ニチダイフィルタ (Nichidai Filter)", "type": "企业", "sources": ["URL", "Serper (Google)"]},
+        {"name": "島精機製作所 (Shima Seiki)", "type": "企业", "sources": ["Serper (Google)"]},
+        {"name": "村田機械 (Murata Machinery)", "type": "企业", "sources": ["Serper (Google)"]},
+        {"name": "大洋金網 (Taiyo Wire Cloth)", "type": "企业", "sources": ["Serper (Google)"]},
+        {"name": "三和工業 (Mitsuwa Industries)", "type": "企业", "sources": ["Serper (Google)"]},
+    ],
+    "美国丝网企业": [
+        {"name": "Gerard Daniel Worldwide", "type": "企业", "sources": ["URL", "Serper (Google)"]},
+        {"name": "W.S. Tyler", "type": "企业", "sources": ["URL", "Serper (Google)"]},
+        {"name": "Newark Wire Cloth", "type": "企业", "sources": ["Serper (Google)"]},
+        {"name": "Cleveland Wire Cloth", "type": "企业", "sources": ["Serper (Google)"]},
+        {"name": "Belleville Wire Cloth", "type": "企业", "sources": ["Serper (Google)"]},
+        {"name": "Cambridge International", "type": "企业", "sources": ["Serper (Google)"]},
+        {"name": "Sefar Inc.", "type": "企业", "sources": ["URL", "Serper (Google)"]},
+    ],
+    "欧洲丝网企业": [
+        {"name": "GKD Gebr. Kufferath", "type": "企业", "sources": ["URL", "Serper (Google)"]},
+        {"name": "G. Bopp + Co. AG", "type": "企业", "sources": ["URL", "Serper (Google)"]},
+        {"name": "Haver & Boecker", "type": "企业", "sources": ["URL", "Serper (Google)"]},
+        {"name": "Dorstener Drahtwerke", "type": "企业", "sources": ["URL", "Serper (Google)"]},
+        {"name": "Sefar AG (瑞士)", "type": "企业", "sources": ["URL", "Serper (Google)"]},
+        {"name": "Russell Finex", "type": "企业", "sources": ["Serper (Google)"]},
+        {"name": "Locker Group", "type": "企业", "sources": ["Serper (Google)"]},
+        {"name": "Spörl KG", "type": "企业", "sources": ["Serper (Google)"]},
     ],
 }
 
@@ -224,7 +261,15 @@ KEYWORD_SCAN_GROUPS = [
     ("国防科技", ["路障车 防暴 路障", "智能护栏 主动防护", "军事 伪装网 隐蔽", "军事 防爆网 爆炸防护"]),
     ("农林渔业", ["养猪网 畜牧 围栏", "海水 养殖网 渔业 网箱", "苗床网 育苗 园艺", "牛栏网 牧场 围栏"]),
     ("其他", ["铜网 紫铜 黄铜", "音网 网罩 音响", "稀有金属网 贵金属网", "银网 镍网 钨网", "服饰 网布 服装 金属网眼", "体育 用网 球网 运动防护"]),
-    ("日本产业链", ["浅田メッシュ 精密 金網", "日本精線 ステンレス 鋼線", "津田駒 織機 最新技術", "鋼筘 綜絖 ヘルド", "Asada Mesh Japan", "Tsudakoma loom"]),
+    ("日本产业链", ["浅田メッシュ 精密 金網", "日本精線 ステンレス 鋼線", "津田駒 織機 最新技術", "鋼筘 綜絖 ヘルド", "Asada Mesh Japan", "Tsudakoma loom",
+                    "NBC Meshtec 精密 メッシュ", "奥谷金網 パンチング", "関西金網 Nippon Filcon フィルター",
+                    "大日金属 金網 ワイヤークロス", "吉田金属 精密加工", "阪倉金網 極細線",
+                    "松本金網 特殊織", "ニチダイ 焼結 フィルター", "島精機 編機", "村田機械 3D織り"]),
+    ("美国丝网", ["Gerard Daniel wire cloth", "WS Tyler sieve mesh", "Newark Wire Cloth filter",
+                  "Cleveland Wire Cloth industrial", "Belleville Wire Cloth aerospace",
+                  "Cambridge International wire belt", "Sefar filtration mesh"]),
+    ("欧洲丝网", ["GKD Kufferath technical mesh", "G. Bopp wire cloth", "Haver Boecker wire weaving",
+                  "Dorstener Drahtwerke sintered", "Russell Finex sieving", "Locker Group wire mesh"]),
 ]
 
 # 所有被监测的 URL
@@ -242,9 +287,28 @@ URL_MONITOR_LIST = [
     {"url": "https://www.cqv.chinamae.com/",              "name": "振动筛分信息网",        "category": "矿山开采"},
     {"url": "https://www.chinapaper.net/",                "name": "中国造纸网",            "category": "造纸印刷"},
     {"url": "https://www.ccmsa.net.cn/",                  "name": "中国建筑装饰协会",      "category": "建筑装饰"},
+
+    # 日本新增
+    {"url": "https://www.nbc-jp.com/",                     "name": "NBC Meshtec",            "category": "日本产业链"},
+    {"url": "https://www.okutanikanaami.co.jp/",           "name": "奥谷金網製作所",         "category": "日本产业链"},
+    {"url": "https://www.sakakura-kanaami.co.jp/",         "name": "阪倉金網",               "category": "日本产业链"},
+    {"url": "https://www.wire-mesh.co.jp/",                "name": "松本金網",               "category": "日本产业链"},
+    {"url": "https://www.nichidai.jp/",                    "name": "ニチダイフィルタ",       "category": "日本产业链"},
+
+    # 美国
+    {"url": "https://www.gerarddaniel.com/",               "name": "Gerard Daniel Worldwide", "category": "美国丝网"},
+    {"url": "https://wstyler.com/",                        "name": "W.S. Tyler",              "category": "美国丝网"},
+    {"url": "https://sefar.us/",                           "name": "Sefar Inc.",              "category": "美国丝网"},
+
+    # 欧洲
+    {"url": "https://www.gkd-group.com/",                  "name": "GKD Gebr. Kufferath",     "category": "欧洲丝网"},
+    {"url": "https://www.bopp.com/",                       "name": "G. Bopp + Co. AG",        "category": "欧洲丝网"},
+    {"url": "https://www.haverboecker.com/",               "name": "Haver & Boecker",         "category": "欧洲丝网"},
+    {"url": "https://dorstener-drahtwerke.de/",            "name": "Dorstener Drahtwerke",    "category": "欧洲丝网"},
+    {"url": "https://www.sefar.com/",                      "name": "Sefar AG",                "category": "欧洲丝网"},
 ]
 
-# Bing News 查询（中英文混合）
+# Serper + Bing Web 查询（中英文混合）
 BING_NEWS_QUERIES = [
     # 原材料 — 仅中国相关
     ("不锈钢 镍 价格 行情", "原材料"),
@@ -376,6 +440,41 @@ BING_NEWS_QUERIES = [
     ("Japan precision mesh filter technology industry", "日本产业链"),
     ("Toyota Industries textile machinery 2026", "日本产业链"),
 
+    # 日本新增企业监控
+    ("NBC Meshtec precision metal mesh semiconductor filter", "日本产业链"),
+    ("NBCメッシュテック 精密 印刷 メッシュ 半導体", "日本产业链"),
+    ("奥谷金網 OKS1895 パンチングメタル フィルター", "日本产业链"),
+    ("Okutani wire mesh punching metal filter Japan", "日本产业链"),
+    ("Nippon Filcon 関西金網 産業用メッシュ フィルター", "日本产业链"),
+    ("Dainichi Kinzoku 大日金属 金網 ワイヤークロス", "日本产业链"),
+    ("Yoshida Kinzoku Kogyo 金属 精密加工 フィルター", "日本产业链"),
+    ("阪倉金網 Sakakura wire mesh ultra fine stainless steel", "日本产业链"),
+    ("八尾金網 精密フィルター メッシュ 製造", "日本产业链"),
+    ("松本金網 Matsubara 特殊織 金網 繊維", "日本产业链"),
+    ("Nichidai Filter ニチダイ 焼結金属 フィルター sintered", "日本产业链"),
+    ("島精機 Shima Seiki whole garment carbon fiber knitting", "日本产业链"),
+    ("村田機械 Murata Machinery 3D woven textile composite", "日本产业链"),
+    ("Taiyo Wire Cloth 大洋金網 石油化学 フィルター", "日本产业链"),
+    ("三和工業 Mitsuwa wire cloth Osaka", "日本产业链"),
+
+    # 美国企业监控
+    ("Gerard Daniel wire cloth filtration North America", "美国丝网"),
+    ("W.S. Tyler wire cloth industrial sieve screening", "美国丝网"),
+    ("Newark Wire Cloth filter strainer industrial mesh", "美国丝网"),
+    ("Cleveland Wire Cloth industrial wire mesh Ohio", "美国丝网"),
+    ("Belleville Wire Cloth aerospace woven wire mesh", "美国丝网"),
+    ("Cambridge International metal conveyor belt wire", "美国丝网"),
+    ("Sefar precision woven filtration medical food", "美国丝网"),
+
+    # 欧洲企业监控
+    ("GKD Kufferath technical woven wire mesh filtration Germany", "欧洲丝网"),
+    ("G. Bopp precision wire cloth Switzerland woven", "欧洲丝网"),
+    ("Haver Boecker wire weaving screening machine Germany", "欧洲丝网"),
+    ("Dorstener Drahtwerke sintered wire mesh filtration Germany", "欧洲丝网"),
+    ("Russell Finex sieving filtration equipment UK", "欧洲丝网"),
+    ("Locker Group wire mesh architectural industrial UK", "欧洲丝网"),
+    ("Spörl KG stainless steel wire mesh precision Germany", "欧洲丝网"),
+
     # 设备
     ("Schlatter wire weaving machine technology", "设备"),
     ("3D weaving composite jacquard", "设备"),
@@ -460,7 +559,7 @@ class DeepFetcher:
                 if resp.status_code != 200:
                     return None
 
-                soup = BeautifulSoup(resp.text, "html.parser")
+                soup = BeautifulSoup(resp.content, "html.parser")
 
                 # 移除脚本/样式
                 for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
@@ -483,104 +582,286 @@ class DeepFetcher:
             return None
 
 
-class BingNewsSource:
-    """Bing 新闻搜索 + 深度抓取"""
+class SerperSource:
+    """Serper.dev Google News API 搜索
 
-    def __init__(self, config: Config, deep_fetcher: DeepFetcher):
-        self.config = config
+    特性：
+    - 通过 gl/hl 参数自动路由语言/地区
+    - 多线程并行执行
+    - URL 去重，按日期排序
+    - 扩展深度抓取白名单
+    """
+
+    # 深抓白名单（域名匹配）
+    DEEP_FETCH_DOMAINS = [
+        "yahoo.com", "nature.com", "eurekalert.org", "reuters.com",
+        "compositesworld.com", "theengineer.co.uk", "news.metal.com",
+        "finance.sina.com.cn", "prnewswire.com", "businesswire.com",
+        "globenewswire.com", "nikkei.com", "bloomberg.com", "wsj.com",
+        "ft.com", "innovationintextiles.com", "technicaltextile.net",
+        "manufacturing.net", "industryweek.com", "venturebeat.com",
+    ]
+
+    # 公司→地区关键词映射（用于英文查询路由）
+    _US_KW = ["gerard daniel", "w.s. tyler", "newark wire", "cleveland wire",
+              "belleville wire", "cambridge", "sefar inc", "north america"]
+    _EU_KW = ["gkd", "kufferath", "bopp", "haver", "boecker", "dorstener",
+              "russell finex", "locker", "spörl", "germany", "switzerland", "uk"]
+    _JP_KW = ["tsudakoma", "asada mesh", "nippon seisen", "shima seiki",
+              "nichidai", "toyota industries", "murata", "nippon filcon",
+              "dainichi", "yoshida kinzoku", "sakakura", "matsubara",
+              "taiyo wire", "mitsuwa", "okutani", "kanaami", "nbc meshtec"]
+
+    def __init__(self, config: Config, deep_fetcher: DeepFetcher, workers: int = 8):
+        self.api_key = config.serper_api_key
         self.fetcher = deep_fetcher
-        self._headers = {
-            "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                           "AppleWebKit/537.36"),
-            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-        }
+        self.workers = workers
+        self._thread_local = threading.local()
+        # Bing 爬虫限流：最多 3 个并发，避免被封
+        self._bing_semaphore = threading.Semaphore(3)
+        self._bing_ua_list = [
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+        ]
 
-    def fetch(self, client: httpx.Client) -> list[NewsItem]:
+    def _get_client(self) -> httpx.Client:
+        """每个线程独立的 httpx 客户端"""
+        if not hasattr(self._thread_local, "client"):
+            self._thread_local.client = httpx.Client(
+                follow_redirects=True, timeout=20)
+        return self._thread_local.client
+
+    # ------------------------------------------------------------
+    # 语言/地区判定
+    # ------------------------------------------------------------
+    @staticmethod
+    def _has_japanese(text: str) -> bool:
+        for ch in text:
+            if '぀' <= ch <= 'ゟ' or '゠' <= ch <= 'ヿ':
+                return True
+        return False
+
+    @staticmethod
+    def _has_chinese(text: str) -> bool:
+        for ch in text:
+            if '一' <= ch <= '鿿':
+                return True
+        return False
+
+    def _route_region(self, query: str) -> tuple[str, str]:
+        """根据查询内容路由到最佳地区 (gl) 和语言 (hl)"""
+        if self._has_japanese(query):
+            return "jp", "ja"
+        if self._has_chinese(query):
+            return "cn", "zh"
+        ql = query.lower()
+        if any(kw in ql for kw in self._JP_KW):
+            return "jp", "en"
+        if any(kw in ql for kw in self._EU_KW):
+            return "de", "en"
+        if any(kw in ql for kw in self._US_KW):
+            return "us", "en"
+        return "us", "en"
+
+    # ------------------------------------------------------------
+    # 路由：中文 → Bing 网页版 / 日英文 → Serper.dev API
+    # ------------------------------------------------------------
+    def _search_one(self, query: str, category: str) -> list[NewsItem]:
+        gl, hl = self._route_region(query)
+        if gl == "cn":
+            return self._search_bing_web(query, category)
+        return self._search_serper(query, category, gl, hl)
+
+    # ------------------------------------------------------------
+    # Serper.dev（日文 / 英文查询）
+    # ------------------------------------------------------------
+    def _search_serper(self, query: str, category: str,
+                       gl: str, hl: str) -> list[NewsItem]:
+        client = self._get_client()
         items = []
 
-        for query, category in BING_NEWS_QUERIES:
-            try:
-                resp = client.get(
-                    "https://www.bing.com/news/search",
-                    params={"q": query, "count": 5},
-                    headers=self._headers,
-                    timeout=20,
-                )
-                if resp.status_code != 200:
+        try:
+            resp = client.post(
+                "https://google.serper.dev/news",
+                json={
+                    "q": query,
+                    "gl": gl,
+                    "hl": hl,
+                    "num": 5,
+                    "tbs": "qdr:w1",
+                },
+                headers={
+                    "X-API-KEY": self.api_key,
+                    "Content-Type": "application/json",
+                },
+            )
+            if resp.status_code != 200:
+                print(f"  [Serper] ✗ {query[:25]} — HTTP {resp.status_code}")
+                return items
+
+            data = resp.json()
+            for r in data.get("news", [])[:5]:
+                title = r.get("title", "")
+                url = r.get("link", "")
+                snippet = r.get("snippet", "")
+                source = r.get("source", "")
+                date = r.get("date", "")[:10]
+
+                if not title or self._is_noise(title, snippet):
                     continue
 
-                soup = BeautifulSoup(resp.text, "html.parser")
+                items.append(NewsItem(
+                    title=title, url=url, snippet=snippet,
+                    source=f"Serper/{source}" if source else "Serper",
+                    date=date, category=category,
+                ))
 
-                for card in soup.select(".news-card")[:5]:
-                    # 取原标题、URL、摘要
-                    title_el = card.select_one(".title")
-                    if not title_el:
-                        continue
-
-                    title = title_el.get_text(strip=True)
-
-                    # 真实 URL：优先 data-url，其次 title a
-                    real_url = card.get("data-url") or card.get("url") or ""
-                    if not real_url:
-                        title_link = card.select_one("a.title")
-                        if title_link:
-                            real_url = title_link.get("href", "")
-
-                    # 摘要
-                    snippet_el = card.select_one(".snippet")
-                    snippet = snippet_el.get_text(strip=True) if snippet_el else ""
-
-                    # 来源名
-                    author = card.get("data-author", "")
-
-                    # 时间
-                    date_str = ""
-                    date_el = card.select_one(".ns_sc_tm")
-                    if date_el:
-                        date_str = date_el.get_text(strip=True)
-
-                    # 噪音过滤
-                    if self._is_noise(title, snippet):
-                        continue
-
-                    items.append(NewsItem(
-                        title=title, url=real_url, snippet=snippet,
-                        source=f"BingNews/{author}" if author else "BingNews",
-                        date=date_str, category=category,
-                    ))
-
-                time.sleep(0.5)
-
-            except Exception as e:
-                print(f"  [BingNews] ✗ {query[:25]} — {e}")
-
-        # === 深度抓取：对高质量来源展开全文 ===
-        print(f"  [深度抓取] 对高质量条目展开全文...")
-        deep_count = 0
-        for item in items:
-            # 只对特定源做深度抓取
-            deep_sources = ["Yahoo Finance", "Nature", "EurekAlert",
-                           "Reuters", "CompositesWorld", "The Engineer",
-                           "news.metal.com", "finance.sina.com.cn",
-                           "CompositesWorld"]
-            if any(s.lower() in item.source.lower() or s.lower() in item.url.lower() for s in deep_sources):
-                if item.url and not item.url.startswith("/"):
-                    full = self.fetcher.fetch_full_text(item.url)
-                    if full:
-                        item.full_text = full
-                        deep_count += 1
-                    time.sleep(1)
-
-        if deep_count:
-            print(f"  [深度抓取] ✓ 成功展开 {deep_count} 篇")
+        except Exception as e:
+            print(f"  [Serper] ✗ {query[:25]} — {e}")
 
         return items
 
-    def _is_noise(self, title: str, snippet: str) -> bool:
+    # ------------------------------------------------------------
+    # Bing 网页版爬虫（中文查询，加 mkt=zh-CN）
+    # ------------------------------------------------------------
+    def _search_bing_web(self, query: str, category: str) -> list[NewsItem]:
+        """使用 Bing 网页搜索 + mkt=zh-CN 查中文新闻"""
+        items = []
+
+        # 限流：最多 3 个并发爬 Bing
+        if not self._bing_semaphore.acquire(timeout=30):
+            return items
+        try:
+            ua = random.choice(self._bing_ua_list)
+            client = self._get_client()
+
+            resp = client.get(
+                "https://www.bing.com/news/search",
+                params={"q": query, "mkt": "zh-CN", "cc": "cn", "count": 5},
+                headers={"User-Agent": ua, "Accept-Language": "zh-CN,zh;q=0.9"},
+                timeout=20,
+            )
+            if resp.status_code != 200:
+                return items
+
+            soup = BeautifulSoup(resp.content, "html.parser")
+
+            for card in soup.select(".news-card")[:5]:
+                title_el = card.select_one(".title")
+                if not title_el:
+                    continue
+                title = title_el.get_text(strip=True)
+
+                # URL：优先 data-url，其次 a.title href
+                url = card.get("data-url") or card.get("url") or ""
+                if not url:
+                    link = card.select_one("a.title")
+                    if link:
+                        url = link.get("href", "")
+
+                snippet_el = card.select_one(".snippet")
+                snippet = snippet_el.get_text(strip=True) if snippet_el else ""
+
+                author = card.get("data-author", "")
+                date_el = card.select_one(".ns_sc_tm")
+                date_str = date_el.get_text(strip=True) if date_el else ""
+
+                if self._is_noise(title, snippet):
+                    continue
+
+                items.append(NewsItem(
+                    title=title, url=url, snippet=snippet,
+                    source=f"BingWeb/{author}" if author else "BingWeb",
+                    date=date_str, category=category,
+                ))
+
+        except Exception as e:
+            print(f"  [BingWeb] ✗ {query[:25]} — {e}")
+        finally:
+            self._bing_semaphore.release()
+
+        return items
+
+    # ------------------------------------------------------------
+    # 去重
+    # ------------------------------------------------------------
+    @staticmethod
+    def _deduplicate(items: list[NewsItem]) -> list[NewsItem]:
+        seen: set[str] = set()
+        deduped = []
+        for item in sorted(items, key=lambda x: x.date or "", reverse=True):
+            key = item.url.strip().lower().rstrip("/")
+            if key not in seen:
+                seen.add(key)
+                deduped.append(item)
+        return deduped
+
+    # ------------------------------------------------------------
+    # 噪音过滤
+    # ------------------------------------------------------------
+    @staticmethod
+    def _is_noise(title: str, snippet: str) -> bool:
         text = (title + " " + snippet).lower()
         noise = ["recipe", "game", "movie", "sport", "music",
                  "亚马逊", "淘宝", "京东", "拼多多", "游戏", "电影", "旅游", "美食"]
         return any(kw in text for kw in noise)
+
+    # ------------------------------------------------------------
+    # 主入口
+    # ------------------------------------------------------------
+    def fetch(self, client: httpx.Client = None) -> list[NewsItem]:
+        """并行执行所有查询，汇集 + 去重 + 深度抓取"""
+        if not self.api_key:
+            print("  [Serper] ⚠ SERPER_API_KEY 未配置，跳过搜索")
+            return []
+
+        queries = list(BING_NEWS_QUERIES)
+        print(f"  [Serper] 并行搜索 {len(queries)} 条查询（{self.workers} 线程）...")
+
+        # --- 并行搜索 ---
+        results: list[NewsItem] = []
+        with ThreadPoolExecutor(max_workers=self.workers) as pool:
+            fut_map = {pool.submit(self._search_one, q, c): (q, c) for q, c in queries}
+            for fut in as_completed(fut_map):
+                q, c = fut_map[fut]
+                try:
+                    items = fut.result()
+                    results.extend(items)
+                except Exception as e:
+                    print(f"  [Serper] ✗ {q[:25]} — {e}")
+
+        # --- 去重 ---
+        deduped = self._deduplicate(results)
+        print(f"  [Serper] 总计 {len(results)} 条，去重后 {len(deduped)} 条")
+
+        # --- 深度抓取（匹配白名单域名的条目）---
+        deep_items = [
+            item for item in deduped
+            if any(d in item.url.lower() for d in self.DEEP_FETCH_DOMAINS)
+            and item.url and not item.url.startswith("/")
+        ][:15]
+
+        if deep_items:
+            print(f"  [深度抓取] 并行展开 {len(deep_items)} 篇...")
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                fut_map = {
+                    pool.submit(self.fetcher.fetch_full_text, item.url): item
+                    for item in deep_items
+                }
+                deep_count = 0
+                for fut in as_completed(fut_map):
+                    item = fut_map[fut]
+                    try:
+                        full = fut.result()
+                        if full:
+                            item.full_text = full
+                            deep_count += 1
+                    except Exception:
+                        pass
+            print(f"  [深度抓取] ✓ 成功展开 {deep_count} 篇")
+
+        return deduped
 
 
 class URLMonitor:
@@ -605,7 +886,7 @@ class URLMonitor:
                     print(f"  [URL] ✗ {target['name']} — HTTP {resp.status_code}")
                     continue
 
-                soup = BeautifulSoup(resp.text, "html.parser")
+                soup = BeautifulSoup(resp.content, "html.parser")
                 page_title = soup.title.get_text(strip=True) if soup.title else ""
                 text = soup.get_text(separator=" ", strip=True)[:500]
 
@@ -765,7 +1046,7 @@ class Collector:
         self.deep_fetcher = DeepFetcher()
         self.checklist = MonitorChecklist()
         self.sources = [
-            ("Bing新闻", BingNewsSource(config, self.deep_fetcher)),
+            ("Serper搜索", SerperSource(config, self.deep_fetcher)),
             ("URL监控", URLMonitor(config)),
             ("RSS订阅", RSSFeedsSource(config)),
         ]

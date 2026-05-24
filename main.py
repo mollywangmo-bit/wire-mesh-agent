@@ -16,6 +16,7 @@ from collector import Collector
 from analyzer import Analyzer
 from delivery import Delivery
 from reporter import generate_pdf
+from html_reporter import generate_html_report
 
 
 def run_once():
@@ -63,7 +64,7 @@ def run_once():
     print(f"  报告已保存至: {report_path}")
 
     # 4. 生成 PDF
-    print("\n>>> [4/4] 生成 PDF 并投递...")
+    print("\n>>> [4/4] 生成 PDF...")
     try:
         pdf_path = generate_pdf(report, f"/tmp/wire_mesh_weekly_report_{date_str}.pdf")
         print(f"  PDF 已生成: {pdf_path}")
@@ -71,9 +72,18 @@ def run_once():
         print(f"  PDF 生成失败: {e}")
         pdf_path = None
 
-    # 5. 投递报告
+    # 5. 生成 HTML 版本（用于邮件正文）
+    print("\n>>> [4b] 生成 HTML 报告（带可视化）...")
+    try:
+        html_path = generate_html_report(report, f"/tmp/wire_mesh_weekly_report_{date_str}.html")
+        print(f"  HTML 已生成: {html_path}")
+    except Exception as e:
+        print(f"  HTML 生成失败: {e}")
+        html_path = None
+
+    # 6. 投递报告
     delivery = Delivery(config)
-    delivery.deliver_all(report, pdf_path)
+    delivery.deliver_all(report, pdf_path, html_path)
 
     print("\n" + "=" * 60)
     print("  完成！")

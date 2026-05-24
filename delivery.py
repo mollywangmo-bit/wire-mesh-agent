@@ -33,8 +33,8 @@ class Delivery:
         self.config = config
         self.client = httpx.Client(timeout=20.0)
 
-    def send_email(self, report: str, pdf_path: str | None = None) -> bool:
-        """通过邮件发送报告（含 PDF 附件），内置重试"""
+    def send_email(self, report: str, pdf_path: str | None = None, html_path: str | None = None) -> bool:
+        """通过邮件发送报告（含 PDF + HTML 附件），内置重试"""
         cfg = self.config
         if not all([cfg.smtp_server, cfg.smtp_user, cfg.smtp_password, cfg.email_to]):
             print("  [邮件] 配置不完整，跳过")
@@ -49,7 +49,13 @@ class Delivery:
         msg["To"] = cfg.email_to
 
         # 正文
-        msg.attach(MIMEText(report, "plain", "utf-8"))
+        body = report
+        if html_path and Path(html_path).exists():
+            body += (
+                f"\n\n---\n🌐 HTML 可视化报告已随附件发送，"
+                f"建议使用浏览器打开以获得最佳阅读体验。"
+            )
+        msg.attach(MIMEText(body, "plain", "utf-8"))
 
         # PDF 附件
         if pdf_path and Path(pdf_path).exists():
@@ -64,6 +70,19 @@ class Delivery:
                 )
                 msg.attach(attachment)
 
+        # HTML 附件
+        if html_path and Path(html_path).exists():
+            with open(html_path, "rb") as f:
+                html_att = MIMEBase("text", "html")
+                html_att.set_payload(f.read())
+                encoders.encode_base64(html_att)
+                html_att.add_header(
+                    "Content-Disposition",
+                    "attachment",
+                    filename=f"丝网行业周报_{date_str}.html",
+                )
+                msg.attach(html_att)
+
         last_err = None
         for attempt in range(1, SMTP_RETRIES + 1):
             try:
@@ -72,7 +91,13 @@ class Delivery:
                     server.starttls()
                     server.login(cfg.smtp_user, cfg.smtp_password)
                     server.send_message(msg)
-                print(f"  [邮件] ✓ 已发送至 {cfg.email_to}" + (" (含PDF附件)" if pdf_path else ""))
+                attachments = []
+                if pdf_path:
+                    attachments.append("PDF")
+                if html_path:
+                    attachments.append("HTML")
+                suffix = f" (含{' + '.join(attachments)}附件)" if attachments else ""
+                print(f"  [邮件] ✓ 已发送至 {cfg.email_to}{suffix}")
                 return True
             except Exception as e:
                 last_err = e
@@ -84,7 +109,7 @@ class Delivery:
         print(f"  [邮件] ✗ 发送失败 ({SMTP_RETRIES}次): {last_err}")
         return False
 
-    def send_feishu(self, report: str) -> bool:
+    def send_feishu(self, report: str, html_path: str | None = None) -> bool:
         """通过飞书机器人发送（交互式卡片，支持长内容）"""
         if not self.config.feishu_webhook_url:
             print("  [飞书] 未配置 webhook，跳过")
@@ -94,11 +119,19 @@ class Delivery:
         sections = self._split_report_sections(report)
 
         # 构建飞书交互式卡片
-        # 每个 section 作为一个独立的 markdown 元素
         elements = []
         for title, body in sections:
             md_content = f"**{title}**\n{body.strip()}"
             elements.append({"tag": "markdown", "content": md_content})
+
+        # HTML 报告提示（放在最后一张卡片末尾）
+        if html_path and Path(html_path).exists():
+            elements.append({
+                "tag": "note",
+                "elements": [
+                    {"tag": "plain_text", "content": f"🌐 HTML 可视化报告已生成（{Path(html_path).name}），已随邮件发送。"}
+                ],
+            })
 
         MAX_ELEMENTS = 25  # 单卡片最大元素数
         MAX_BODY_CHARS = 18000  # 安全限制
@@ -109,7 +142,7 @@ class Delivery:
         current_chars = 0
 
         for elem in elements:
-            text_len = len(elem["content"])
+            text_len = len(str(elem))
             if current_chars + text_len > MAX_BODY_CHARS or len(current_batch) >= MAX_ELEMENTS:
                 if current_batch:
                     batches.append(current_batch)
@@ -212,12 +245,12 @@ class Delivery:
             print(f"  [企微] ✗ 发送失败: {e}")
             return False
 
-    def deliver_all(self, report: str, pdf_path: str | None = None):
+    def deliver_all(self, report: str, pdf_path: str | None = None, html_path: str | None = None):
         """向所有已配置的渠道投递报告"""
         print(f"\n  === 投递报告 ===")
         results = [
-            ("邮件", self.send_email(report, pdf_path)),
-            ("飞书", self.send_feishu(report)),
+            ("邮件", self.send_email(report, pdf_path, html_path)),
+            ("飞书", self.send_feishu(report, html_path)),
             ("企微", self.send_wecom(report)),
         ]
 
