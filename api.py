@@ -23,6 +23,22 @@ _last_run = {
 }
 
 
+@app.get("/")
+def root():
+    """根路径 — 部分部署平台用此做健康检查"""
+    return {
+        "service": "丝网行业研究 Agent",
+        "status": "alive",
+        "endpoints": {"/health": "GET", "/run": "POST", "/run/status": "GET"},
+    }
+
+
+@app.post("/")
+def root_trigger(background_tasks: BackgroundTasks):
+    """根路径 POST — 部分部署平台的 cron 机制发 POST /"""
+    return trigger_run(background_tasks)
+
+
 @app.get("/health")
 def health():
     """Zeabur 健康检查"""
