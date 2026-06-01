@@ -6,6 +6,7 @@
 - POST /run          — 触发完整流水线（异步执行）
 - GET  /run/status   — 查看最近一次运行状态
 """
+import os
 import sys
 from datetime import datetime, timezone
 
@@ -49,10 +50,22 @@ def root_trigger(background_tasks: BackgroundTasks):
 @app.get("/health")
 def health():
     """Zeabur 健康检查"""
+    # 检查 SMTP 配置是否完整（仅报告有无，不泄露值）
+    smtp_server = os.getenv("SMTP_SERVER", "")
+    smtp_user = os.getenv("SMTP_USER", "")
+    smtp_pass = os.getenv("SMTP_PASSWORD", "")
+    smtp_to = os.getenv("EMAIL_TO", "")
     return {
         "status": "alive",
         "last_run_status": _last_run["status"],
         "last_run_at": _last_run["finished_at"],
+        "smtp": {
+            "server": bool(smtp_server),
+            "user": bool(smtp_user),
+            "password_set": bool(smtp_pass),
+            "password_len": len(smtp_pass),
+            "to": bool(smtp_to),
+        },
     }
 
 
