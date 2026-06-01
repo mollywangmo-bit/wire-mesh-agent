@@ -79,7 +79,7 @@ def _execute_pipeline():
     _last_run["error"] = None
 
     try:
-        run_once()
+        run_once(also_brief=True)  # 每周一自动生成完整版 + 精简版
         _last_run["status"] = "success"
     except Exception as exc:
         _last_run["status"] = "failed"
