@@ -22,6 +22,13 @@ _last_run = {
     "error": None,
 }
 
+_last_monthly_run = {
+    "status": "never_run",
+    "started_at": None,
+    "finished_at": None,
+    "error": None,
+}
+
 
 @app.get("/")
 def root():
@@ -29,7 +36,7 @@ def root():
     return {
         "service": "丝网行业研究 Agent",
         "status": "alive",
-        "endpoints": {"/health": "GET", "/run": "POST", "/run/status": "GET"},
+        "endpoints": {"/health": "GET", "/run": "POST", "/run/monthly": "POST", "/run/status": "GET"},
     }
 
 
@@ -66,7 +73,7 @@ def trigger_run(background_tasks: BackgroundTasks):
 
 
 def _execute_pipeline():
-    """执行流水线并记录结果"""
+    """执行周报流水线并记录结果"""
     _last_run["status"] = "running"
     _last_run["started_at"] = datetime.now(timezone.utc).isoformat()
     _last_run["error"] = None
@@ -77,6 +84,33 @@ def _execute_pipeline():
     except Exception as exc:
         _last_run["status"] = "failed"
         _last_run["error"] = str(exc)
-        print(f"[Agent] 流水线执行失败: {exc}", file=sys.stderr)
+        print(f"[Agent] 周报流水线执行失败: {exc}", file=sys.stderr)
     finally:
         _last_run["finished_at"] = datetime.now(timezone.utc).isoformat()
+
+
+@app.post("/run/monthly")
+def trigger_monthly(background_tasks: BackgroundTasks):
+    """触发月报流水线（每月1号执行）"""
+    if _last_monthly_run["status"] == "running":
+        return {"status": "skipped", "reason": "月报流水线正在执行中，请稍后再试"}
+
+    background_tasks.add_task(_execute_monthly_pipeline)
+    return {"status": "started", "message": "月报流水线已启动，将在后台执行"}
+
+
+def _execute_monthly_pipeline():
+    """执行月报流水线并记录结果"""
+    _last_monthly_run["status"] = "running"
+    _last_monthly_run["started_at"] = datetime.now(timezone.utc).isoformat()
+    _last_monthly_run["error"] = None
+
+    try:
+        run_once(period="monthly")
+        _last_monthly_run["status"] = "success"
+    except Exception as exc:
+        _last_monthly_run["status"] = "failed"
+        _last_monthly_run["error"] = str(exc)
+        print(f"[Agent] 月报流水线执行失败: {exc}", file=sys.stderr)
+    finally:
+        _last_monthly_run["finished_at"] = datetime.now(timezone.utc).isoformat()

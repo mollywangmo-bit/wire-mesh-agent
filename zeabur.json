@@ -4,6 +4,11 @@
       "path": "/run",
       "schedule": "0 0 * * 1",
       "method": "POST"
+    },
+    {
+      "path": "/run/monthly",
+      "schedule": "0 0 1 * *",
+      "method": "POST"
     }
   ]
 }

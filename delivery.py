@@ -33,7 +33,8 @@ class Delivery:
         self.config = config
         self.client = httpx.Client(timeout=20.0)
 
-    def send_email(self, report: str, pdf_path: str | None = None, html_path: str | None = None) -> bool:
+    def send_email(self, report: str, pdf_path: str | None = None,
+                   html_path: str | None = None, prefix: str = "周报") -> bool:
         """通过邮件发送报告（含 PDF + HTML 附件），内置重试"""
         cfg = self.config
         if not all([cfg.smtp_server, cfg.smtp_user, cfg.smtp_password, cfg.email_to]):
@@ -41,7 +42,7 @@ class Delivery:
             return False
 
         date_str = datetime.now().strftime("%Y-%m-%d")
-        subject = f"丝网行业周报｜{date_str}"
+        subject = f"丝网行业{prefix}｜{date_str}"
 
         msg = MIMEMultipart()
         msg["Subject"] = Header(subject, "utf-8")
@@ -66,7 +67,7 @@ class Delivery:
                 attachment.add_header(
                     "Content-Disposition",
                     "attachment",
-                    filename=f"丝网行业周报_{date_str}.pdf",
+                    filename=f"丝网行业{prefix}_{date_str}.pdf",
                 )
                 msg.attach(attachment)
 
@@ -79,7 +80,7 @@ class Delivery:
                 html_att.add_header(
                     "Content-Disposition",
                     "attachment",
-                    filename=f"丝网行业周报_{date_str}.html",
+                    filename=f"丝网行业{prefix}_{date_str}.html",
                 )
                 msg.attach(html_att)
 
@@ -109,7 +110,8 @@ class Delivery:
         print(f"  [邮件] ✗ 发送失败 ({SMTP_RETRIES}次): {last_err}")
         return False
 
-    def send_feishu(self, report: str, html_path: str | None = None) -> bool:
+    def send_feishu(self, report: str, html_path: str | None = None,
+                    prefix: str = "周报") -> bool:
         """通过飞书机器人发送（交互式卡片，支持长内容）"""
         if not self.config.feishu_webhook_url:
             print("  [飞书] 未配置 webhook，跳过")
@@ -163,7 +165,7 @@ class Delivery:
                     "header": {
                         "title": {
                             "tag": "plain_text",
-                            "content": f"丝网行业周报｜{date_str}{suffix}",
+                            "content": f"丝网行业{prefix}｜{date_str}{suffix}",
                         },
                         "template": "blue",
                     },
@@ -214,7 +216,7 @@ class Delivery:
 
         return sections
 
-    def send_wecom(self, report: str) -> bool:
+    def send_wecom(self, report: str, prefix: str = "周报") -> bool:
         """通过企业微信机器人发送"""
         if not self.config.wecom_webhook_url:
             print("  [企微] 未配置 webhook，跳过")
@@ -224,7 +226,7 @@ class Delivery:
         payload = {
             "msgtype": "markdown",
             "markdown": {
-                "content": f"# 丝网行业周报｜{datetime.now().strftime('%Y-%m-%d')}\n\n{content}",
+                "content": f"# 丝网行业{prefix}｜{datetime.now().strftime('%Y-%m-%d')}\n\n{content}",
             },
         }
 
@@ -245,13 +247,14 @@ class Delivery:
             print(f"  [企微] ✗ 发送失败: {e}")
             return False
 
-    def deliver_all(self, report: str, pdf_path: str | None = None, html_path: str | None = None):
+    def deliver_all(self, report: str, pdf_path: str | None = None,
+                    html_path: str | None = None, prefix: str = "周报"):
         """向所有已配置的渠道投递报告"""
-        print(f"\n  === 投递报告 ===")
+        print(f"\n  === 投递{prefix} ===")
         results = [
-            ("邮件", self.send_email(report, pdf_path, html_path)),
-            ("飞书", self.send_feishu(report, html_path)),
-            ("企微", self.send_wecom(report)),
+            ("邮件", self.send_email(report, pdf_path, html_path, prefix=prefix)),
+            ("飞书", self.send_feishu(report, html_path, prefix=prefix)),
+            ("企微", self.send_wecom(report, prefix=prefix)),
         ]
 
         success = sum(1 for _, ok in results if ok)

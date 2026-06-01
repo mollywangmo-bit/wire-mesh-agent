@@ -184,6 +184,7 @@ class Config:
         # === 中国 ===
         "青山集团", "山东钢铁", "宝武钢铁",
         "东方特钢", "德龙镍业",
+        "微创医疗", "MicroPort",
 
         # === 日本 ===
         "Asada Mesh", "Schlatter", "Asagoe",
@@ -219,6 +220,9 @@ class Config:
         "Locker Group",
         "Spörl KG",
     ])
+
+    # 报告周期（由 main.py 动态设置）
+    period: str = "weekly"  # "weekly" | "monthly"
 
 
 def load_config() -> Config:

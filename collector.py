@@ -64,7 +64,7 @@ MONITOR_MANIFEST = {
         {"name": "半导体材料与工艺设备", "type": "公众号", "sources": ["Wechat2RSS"]},
         {"name": "神介资讯", "type": "公众号", "sources": ["Wechat2RSS"]},
         {"name": "医疗器械创新网", "type": "公众号", "sources": ["Wechat2RSS"]},
-        {"name": "微创医疗", "type": "公众号", "sources": ["Wechat2RSS"]},
+        {"name": "微创医疗", "type": "公众号", "sources": ["Wechat2RSS", "Serper (Google)"]},
         {"name": "乐普医疗", "type": "公众号", "sources": ["Wechat2RSS"]},
         {"name": "心脉医疗", "type": "公众号", "sources": ["Wechat2RSS"]},
         {"name": "建筑工业化", "type": "公众号", "sources": ["Bing Web（话题覆盖）", "Wechat2RSS"]},
@@ -405,6 +405,8 @@ BING_NEWS_QUERIES = [
     ("分样筛 检验 筛 实验室 设备", "医疗卫生"),
     ("蚀刻网 精密 金属 蚀刻 医疗", "医疗卫生"),
     ("血管 支架 密网 编织 介入 医疗器械", "医疗卫生"),
+    ("微创医疗 MicroPort 心脉 医疗 器械 支架", "医疗卫生"),
+    ("MicroPort Medical stent catheter interventional", "医疗卫生"),
 
     # 航空航天
     ("烧结网 烧结毡 高温 过滤 材料", "航空航天"),
@@ -527,6 +529,7 @@ class NewsItem:
         self.date = date or datetime.now().strftime("%Y-%m-%d")
         self.category = category
         self.full_text = full_text  # 深度抓取后的全文
+        self.chinese_summary: Optional[str] = None  # 非中文内容的 AI 中文摘要
 
     def to_dict(self) -> dict:
         return {
@@ -534,6 +537,7 @@ class NewsItem:
             "snippet": self.snippet, "source": self.source,
             "date": self.date, "category": self.category,
             "full_text": self.full_text,
+            "chinese_summary": self.chinese_summary,
         }
 
     def __repr__(self):
@@ -614,6 +618,7 @@ class SerperSource:
 
     def __init__(self, config: Config, deep_fetcher: DeepFetcher, workers: int = 8):
         self.api_key = config.serper_api_key
+        self.period = config.period  # "weekly" | "monthly"
         self.fetcher = deep_fetcher
         self.workers = workers
         self._thread_local = threading.local()
@@ -682,14 +687,21 @@ class SerperSource:
         items = []
 
         try:
+            # 根据周期选择时间窗口和数量
+            if self.period == "monthly":
+                num = 10
+                tbs = "qdr:m1"  # 过去一个月
+            else:
+                num = 5
+                tbs = "qdr:w1"  # 过去一周
             resp = client.post(
                 "https://google.serper.dev/news",
                 json={
                     "q": query,
                     "gl": gl,
                     "hl": hl,
-                    "num": 5,
-                    "tbs": "qdr:w1",
+                    "num": num,
+                    "tbs": tbs,
                 },
                 headers={
                     "X-API-KEY": self.api_key,
@@ -1142,12 +1154,105 @@ class Collector:
 
         return "\n\n".join(sections) if sections else "（本周未采集到相关信息）"
 
-    def generate_keyword_scan(self, items: list[NewsItem], max_per_keyword: int = 5) -> str:
+    def batch_translate_non_chinese(self, items: list[NewsItem],
+                                     max_items: int = 30) -> int:
+        """批量翻译非中文新闻条目为中文摘要
+
+        对标题/摘要中不含中文的条目，调用一次 LLM 批量生成一句话中文摘要。
+        结果写入 item.chinese_summary，供 keyword_scan 展示。
+
+        Args:
+            items: 采集的新闻条目列表
+            max_items: 一次翻译的最大条目数（防止 prompt 过长）
+
+        Returns:
+            成功翻译的条目数
+        """
+        # 筛选需要翻译的条目
+        to_translate = []
+        for item in items:
+            text = (item.title + " " + item.snippet).strip()
+            if not text:
+                continue
+            # 检查是否含中文字符
+            has_cjk = any('一' <= ch <= '鿿' for ch in text)
+            if not has_cjk:
+                to_translate.append(item)
+
+        if not to_translate:
+            return 0
+
+        # 截取上限
+        batch = to_translate[:max_items]
+        print(f"  [翻译] 发现 {len(to_translate)} 条非中文内容，正在翻译...")
+
+        # 构造批量翻译 prompt
+        lines = []
+        for i, item in enumerate(batch):
+            context = f"[{i}] Title: {item.title}\n    Snippet: {item.snippet[:200]}"
+            if item.full_text:
+                context += f"\n    Full: {item.full_text[:300]}"
+            lines.append(context)
+
+        prompt = (
+            f"Translate the following {len(batch)} news items into Chinese summaries.\n"
+            f"For each item, write ONE concise Chinese summary sentence (15-35 characters).\n\n"
+            + "\n\n".join(lines) +
+            "\n\nOutput format (one per line, exact format):\n"
+            + "\n".join(f"[{i}] → <中文摘要>" for i in range(len(batch)))
+        )
+
+        try:
+            import httpx
+            resp = httpx.post(
+                f"{self.config.llm_base_url.rstrip('/')}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {self.config.llm_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": self.config.llm_model,
+                    "messages": [
+                        {"role": "system", "content": "你是专业的翻译助理。将英文/日文新闻用一句话中文摘要，简洁准确。"},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "temperature": 0.1,
+                    "max_tokens": 1024,
+                },
+                timeout=30,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            content = data["choices"][0]["message"]["content"]
+
+            # 解析结果：逐行匹配 [N] → summary
+            translated_count = 0
+            for line in content.strip().split("\n"):
+                m = re.match(r'^\s*\[(\d+)\]\s*→\s*(.+)', line.strip())
+                if m:
+                    idx = int(m.group(1))
+                    summary = m.group(2).strip()
+                    if 0 <= idx < len(batch):
+                        batch[idx].chinese_summary = summary
+                        translated_count += 1
+
+            print(f"  [翻译] ✓ {translated_count}/{len(batch)} 条翻译成功")
+            return translated_count
+
+        except Exception as e:
+            print(f"  [翻译] ✗ 批量翻译失败: {e}")
+            return 0
+
+    def generate_keyword_scan(self, items: list[NewsItem], max_per_keyword: int = 5,
+                              show_keywords: bool = True) -> str:
         """生成关键词扫描新闻列举（周报第10部分）
 
         对每类产品关键词，扫描采集结果中的标题/摘要/来源，
         列出匹配的新闻条目及原文链接。
         与 LLM 行业分析不同，此为纯文本匹配的新闻列举。
+
+        Args:
+            show_keywords: 若为 False，不显示 "**[关键词]**：" 标题行，仅列新闻条目
         """
         # 建立可搜索的文本索引
         url_dedup = {}
@@ -1186,21 +1291,33 @@ class Collector:
                     for m in matches:
                         url_str = f" 原文: {m.url}" if m.url and not m.url.startswith("/") else ""
                         date_str = f" [{m.date}]" if m.date else ""
-                        kw_lines.append(
-                            f"  - [{m.title}]({m.url}){date_str} — {m.snippet[:120]}"
-                        )
-                    cat_matches.append(f"  **{kw}**：\n" + "\n".join(kw_lines))
+                        entry = f"  - [{m.title}]({m.url}){date_str} — {m.snippet[:120]}"
+                        # 非中文内容追加 AI 中文摘要
+                        if m.chinese_summary:
+                            entry += f"\n    📖 中文摘要：{m.chinese_summary}"
+                        kw_lines.append(entry)
+                    if show_keywords:
+                        cat_matches.append(f"  **{kw}**：\n" + "\n".join(kw_lines))
+                    else:
+                        cat_matches.extend(kw_lines)
                 else:
-                    cat_matches.append(f"  **{kw}**：本周暂无相关新闻")
+                    if show_keywords:
+                        cat_matches.append(f"  **{kw}**：本周暂无相关新闻")
 
             section = f"### {cat_name}\n" + "\n\n".join(cat_matches) + "\n"
             sections.append(section)
 
-        header = (
-            "## 11. 关键词扫描 — 新闻列举\n\n"
-            "> 以下为按产品关键词从本周采集信息中匹配的新闻条目，"
-            "属于机器匹配的新闻列举，区别于以上 LLM 行业分析。\n\n"
-        )
+        if show_keywords:
+            header = (
+                "## 11. 关键词扫描 — 新闻列举\n\n"
+                "> 以下为按产品关键词从本周采集信息中匹配的新闻条目，"
+                "属于机器匹配的新闻列举，区别于以上 LLM 行业分析。\n\n"
+            )
+        else:
+            header = (
+                "## 11. 新闻列举\n\n"
+                "> 以下为本周采集新闻列举。\n\n"
+            )
 
         return header + "\n".join(sections)
 

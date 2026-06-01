@@ -605,6 +605,19 @@ body {{
   max-height: 260px;
 }}
 
+/* SVG fallback for PDF — hidden in browser, shown in print (WeasyPrint) */
+.chart-fallback {{
+  display: none;
+}}
+@media print {{
+  .chart-js {{
+    display: none !important;
+  }}
+  .chart-fallback {{
+    display: block !important;
+  }}
+}}
+
 /* ── Footer ── */
 .report-footer {{
   margin-top: var(--space-8);
@@ -714,11 +727,13 @@ body {{
       <div class="charts-grid">
         <div class="chart-card">
           <h3>各板块内容量</h3>
-          <canvas id="volumeChart"></canvas>
+          <canvas id="volumeChart" class="chart-js"></canvas>
+          {volume_chart_svg}
         </div>
         <div class="chart-card">
           <h3>信息关联度分布</h3>
-          <canvas id="relevanceChart"></canvas>
+          <canvas id="relevanceChart" class="chart-js"></canvas>
+          {relevance_chart_svg}
         </div>
       </div>
     </div>
@@ -759,6 +774,9 @@ const observer = new IntersectionObserver((entries) => {{
   }});
 }}, {{ rootMargin: '-80px 0px -80% 0px' }});
 document.querySelectorAll('.section[id]').forEach(el => observer.observe(el));
+
+// ── Hide SVG fallbacks (they are for print/PDF only) ──
+document.querySelectorAll('.chart-fallback').forEach(el => {{ el.style.display = 'none'; }});
 
 // ── Volume Chart ──
 const volumeCtx = document.getElementById('volumeChart');
@@ -838,6 +856,144 @@ if (relevanceCtx) {{
 </html>"""
 
 
+# ── SVG Fallback Charts (for WeasyPrint PDF) ────────────────────────────
+
+_SVG_COLORS = [
+    "#0070F3", "#46A758", "#FFB224", "#E5484D",
+    "#8B5CF6", "#06B6D4", "#F97316", "#EC4899",
+    "#14B8A6", "#6366F1", "#84CC16",
+]
+
+_SVG_RELEVANCE_COLORS = {
+    "direct": "#0070F3",
+    "indirect": "#46A758",
+    "signal": "#FFB224",
+}
+_SVG_RELEVANCE_LABELS = {
+    "direct": "直接相关",
+    "indirect": "间接影响",
+    "signal": "趋势信号",
+}
+
+
+def _generate_volume_svg(sections: list[dict]) -> str:
+    """Generate SVG fallback for the volume horizontal bar chart"""
+    if not sections:
+        return ""
+
+    svg_width = 500
+    bar_height = 18
+    gap = 8
+    label_width = 130
+    padding_top = 10
+    padding_bottom = 10
+    max_bar_width = svg_width - label_width - 60
+
+    max_val = max(s["word_count"] for s in sections) if sections else 1
+    total_height = len(sections) * (bar_height + gap) + padding_top + padding_bottom
+
+    lines = [
+        f'<svg class="chart-fallback" width="100%" height="{total_height}" '
+        f'viewBox="0 0 {svg_width} {total_height}" '
+        f'xmlns="http://www.w3.org/2000/svg">'
+    ]
+
+    for i, sec in enumerate(sections):
+        y = padding_top + i * (bar_height + gap)
+        val = max(sec["word_count"], 1)
+        bar_w = int(val / max_val * max_bar_width)
+        color = _SVG_COLORS[i % len(_SVG_COLORS)]
+
+        # Shorten label
+        m = re.match(r"^(\d+)\.\s*(.*)", sec["title"])
+        if m:
+            label = f'{m.group(1)}. {m.group(2)[:12]}'
+        else:
+            label = sec["title"][:18]
+
+        lines.append(
+            f'  <text x="{label_width - 8}" y="{y + bar_height - 5}" '
+            f'text-anchor="end" font-family="sans-serif" font-size="11" '
+            f'fill="#555">{_escape_svg_text(label)}</text>'
+        )
+        lines.append(
+            f'  <rect x="{label_width}" y="{y}" width="{bar_w}" '
+            f'height="{bar_height}" rx="3" fill="{color}" opacity="0.85"/>'
+        )
+        lines.append(
+            f'  <text x="{label_width + bar_w + 6}" y="{y + bar_height - 5}" '
+            f'font-family="sans-serif" font-size="11" '
+            f'fill="#888">{val}</text>'
+        )
+
+    lines.append("</svg>")
+    return "\n".join(lines)
+
+
+def _generate_relevance_svg(relevance_counts: dict) -> str:
+    """Generate SVG fallback for the relevance distribution (stacked bar)"""
+    total = sum(relevance_counts.values()) or 1
+
+    svg_width = 400
+    bar_height = 28
+    bar_y = 10
+    margin = 30
+    usable_width = svg_width - margin * 2
+
+    lines = [
+        f'<svg class="chart-fallback" width="100%" height="90" '
+        f'viewBox="0 0 {svg_width} 90" '
+        f'xmlns="http://www.w3.org/2000/svg">'
+    ]
+
+    # Stacked horizontal bar
+    x = margin
+    for key in ("direct", "indirect", "signal"):
+        val = relevance_counts.get(key, 0)
+        width = int(val / total * usable_width) if total > 0 else 0
+        if width > 0:
+            color = _SVG_RELEVANCE_COLORS[key]
+            lines.append(
+                f'  <rect x="{x}" y="{bar_y}" width="{width}" '
+                f'height="{bar_height}" fill="{color}" rx="2"/>'
+            )
+            if width > 40:
+                label = _SVG_RELEVANCE_LABELS[key]
+                lines.append(
+                    f'  <text x="{x + width // 2}" y="{bar_y + bar_height // 2 + 4}" '
+                    f'text-anchor="middle" font-family="sans-serif" font-size="11" '
+                    f'fill="#fff" font-weight="600">{label}</text>'
+                )
+            x += width
+
+    # Legend
+    legend_y = bar_y + bar_height + 18
+    x = margin
+    for key in ("direct", "indirect", "signal"):
+        val = relevance_counts.get(key, 0)
+        pct = round(val / total * 100) if total > 0 else 0
+        color = _SVG_RELEVANCE_COLORS[key]
+        label = _SVG_RELEVANCE_LABELS[key]
+        lines.append(
+            f'  <rect x="{x}" y="{legend_y - 7}" width="10" height="10" '
+            f'fill="{color}" rx="2"/>'
+        )
+        lines.append(
+            f'  <text x="{x + 16}" y="{legend_y + 2}" '
+            f'font-family="sans-serif" font-size="10" '
+            f'fill="#666">{label} {val} ({pct}%)</text>'
+        )
+        x += 120
+
+    lines.append("</svg>")
+    return "\n".join(lines)
+
+
+def _escape_svg_text(text: str) -> str:
+    """Escape special XML characters for SVG text content"""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 # ── Public API ───────────────────────────────────────────────────────────
 
 def generate_html_report(report_text: str, output_path: str | Path) -> str:
@@ -905,6 +1061,10 @@ def generate_html_report(report_text: str, output_path: str | Path) -> str:
 
     total_words = sum(s["word_count"] for s in sections)
 
+    # Generate SVG fallback charts for PDF
+    volume_chart_svg = _generate_volume_svg(sections)
+    relevance_chart_svg = _generate_relevance_svg(relevance_counts)
+
     html = HTML_TEMPLATE.format(
         title=parsed["title"],
         date=parsed["date"],
@@ -916,6 +1076,8 @@ def generate_html_report(report_text: str, output_path: str | Path) -> str:
         chart_labels=str(chart_labels),
         chart_data=str(chart_data),
         relevance_chart_data=str(relevance_chart),
+        volume_chart_svg=volume_chart_svg,
+        relevance_chart_svg=relevance_chart_svg,
     )
 
     output_path = Path(output_path)
