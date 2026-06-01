@@ -114,3 +114,31 @@ def _execute_monthly_pipeline():
         print(f"[Agent] 月报流水线执行失败: {exc}", file=sys.stderr)
     finally:
         _last_monthly_run["finished_at"] = datetime.now(timezone.utc).isoformat()
+
+
+@app.post("/debug/email")
+def debug_email():
+    """诊断邮件配置 — 发测试邮件并返回结果"""
+    try:
+        from config import load_config
+        from delivery import Delivery
+        cfg = load_config()
+        # 检查配置状态
+        config_status = {
+            "smtp_server": bool(cfg.smtp_server),
+            "smtp_port": bool(cfg.smtp_port),
+            "smtp_user": bool(cfg.smtp_user),
+            "smtp_password": bool(cfg.smtp_password),
+            "email_to": bool(cfg.email_to),
+        }
+        delivery = Delivery(cfg)
+        ok = delivery.send_email(
+            "【诊断邮件】来自 Zeabur 的测试消息。如果收到说明 SMTP 配置正确。",
+            prefix="诊断"
+        )
+        return {
+            "config_status": config_status,
+            "send_result": ok,
+        }
+    except Exception as e:
+        return {"error": str(e)}
