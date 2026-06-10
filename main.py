@@ -7,6 +7,7 @@
 3. LLM 分析生成周报
 4. 多渠道投递
 """
+import os
 import sys
 import argparse
 from datetime import datetime
@@ -16,6 +17,7 @@ from collector import Collector
 from analyzer import Analyzer
 from delivery import Delivery
 from html_reporter import generate_html_report
+from docx_reporter import generate_docx
 from html_to_pdf import html_to_pdf
 
 
@@ -107,21 +109,27 @@ def run_once(brief: bool = False, period: str = "weekly", also_brief: bool = Fal
         except Exception as e:
             print(f"  HTML 生成失败: {e}")
 
-        # 生成 PDF
-        pdf_path = None
+        # 生成 Word 文档（python-docx 原生渲染，零系统依赖）
+        docx_path = None
         try:
-            pdf_path = f"/tmp/wire_mesh_{fname_prefix}_report_{date_str}.pdf"
-            if html_path:
-                html_to_pdf(html_path, pdf_path, fallback_md_report=report_text)
-            else:
-                from reporter import generate_pdf
-                generate_pdf(report_text, pdf_path)
-            print(f"  PDF 已生成: {pdf_path}")
+            docx_path = f"/tmp/wire_mesh_{fname_prefix}_report_{date_str}.docx"
+            generate_docx(report_text, docx_path)
+            size_kb = os.path.getsize(docx_path) / 1024
+            print(f"  Word 已生成: {docx_path} ({size_kb:.0f} KB)")
         except Exception as e:
-            print(f"  PDF 生成失败: {e}")
+            print(f"  Word 生成失败: {e}")
 
-        # 投递
-        delivery.deliver_all(report_text, pdf_path, html_path, prefix=label)
+        # 生成 PDF（Playwright：HTML → Chromium 打印）
+        pdf_path = None
+        if html_path:
+            try:
+                pdf_path = f"/tmp/wire_mesh_{fname_prefix}_report_{date_str}.pdf"
+                html_to_pdf(html_path, pdf_path)
+            except Exception as e:
+                print(f"  PDF 生成失败: {e}")
+
+        # 投递（Word + PDF + HTML）
+        delivery.deliver_all(report_text, docx_path, pdf_path, html_path, prefix=label)
 
     print("\n" + "=" * 60)
     print(f"  全部完成（{len(versions)} 个版本）！")

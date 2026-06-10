@@ -2,7 +2,7 @@
 丝网行业研究 Agent - 投递模块
 
 支持多渠道投递：
-1. 邮件（SMTP，PDF 附件）
+1. 邮件（SMTP，Word 附件）
 2. 飞书机器人（Webhook，交互式卡片）
 3. 企业微信机器人（Webhook，markdown）
 """
@@ -33,9 +33,10 @@ class Delivery:
         self.config = config
         self.client = httpx.Client(timeout=20.0)
 
-    def send_email(self, report: str, pdf_path: str | None = None,
+    def send_email(self, report: str, docx_path: str | None = None,
+                   pdf_path: str | None = None,
                    html_path: str | None = None, prefix: str = "周报") -> bool:
-        """通过邮件发送报告（含 PDF + HTML 附件），内置重试"""
+        """通过邮件发送报告（含 Word/PDF/HTML 附件），内置重试"""
         cfg = self.config
         if not all([cfg.smtp_server, cfg.smtp_user, cfg.smtp_password, cfg.email_to]):
             print("  [邮件] 配置不完整，跳过")
@@ -57,6 +58,19 @@ class Delivery:
                 f"建议使用浏览器打开以获得最佳阅读体验。"
             )
         msg.attach(MIMEText(body, "plain", "utf-8"))
+
+        # Word 附件
+        if docx_path and Path(docx_path).exists():
+            with open(docx_path, "rb") as f:
+                attachment = MIMEBase("application", "vnd.openxmlformats-officedocument.wordprocessingml.document")
+                attachment.set_payload(f.read())
+                encoders.encode_base64(attachment)
+                attachment.add_header(
+                    "Content-Disposition",
+                    "attachment",
+                    filename=f"丝网行业{prefix}_{date_str}.docx",
+                )
+                msg.attach(attachment)
 
         # PDF 附件
         if pdf_path and Path(pdf_path).exists():
@@ -93,6 +107,8 @@ class Delivery:
                     server.login(cfg.smtp_user, cfg.smtp_password)
                     server.send_message(msg)
                 attachments = []
+                if docx_path:
+                    attachments.append("Word")
                 if pdf_path:
                     attachments.append("PDF")
                 if html_path:
@@ -247,12 +263,13 @@ class Delivery:
             print(f"  [企微] ✗ 发送失败: {e}")
             return False
 
-    def deliver_all(self, report: str, pdf_path: str | None = None,
+    def deliver_all(self, report: str, docx_path: str | None = None,
+                    pdf_path: str | None = None,
                     html_path: str | None = None, prefix: str = "周报"):
         """向所有已配置的渠道投递报告"""
         print(f"\n  === 投递{prefix} ===")
         results = [
-            ("邮件", self.send_email(report, pdf_path, html_path, prefix=prefix)),
+            ("邮件", self.send_email(report, docx_path, pdf_path, html_path, prefix=prefix)),
             ("飞书", self.send_feishu(report, html_path, prefix=prefix)),
             ("企微", self.send_wecom(report, prefix=prefix)),
         ]
