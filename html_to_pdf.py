@@ -16,7 +16,7 @@ from typing import Optional
 
 
 def html_to_pdf(html_path: str | Path, output_path: str | Path,
-                format: str = "A4") -> str:
+                format: str = "A4") -> Optional[str]:
     """Convert HTML file to PDF using Playwright (Chromium).
 
     Args:
@@ -25,7 +25,7 @@ def html_to_pdf(html_path: str | Path, output_path: str | Path,
         format: Page format (A4, Letter, etc.)
 
     Returns:
-        Path to the generated PDF file
+        Path to the generated PDF file, or None if generation failed.
     """
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -35,18 +35,18 @@ def html_to_pdf(html_path: str | Path, output_path: str | Path,
     except ImportError:
         print("  [PDF] ⚠ Playwright 未安装，跳过 PDF 生成")
         print("        pip install playwright && playwright install chromium")
-        return str(output_path)
+        return None
 
-    html_abspath = os.path.abspath(str(html_path))
-    if not os.path.exists(html_abspath):
+    html_abspath = Path(html_path).resolve()
+    if not html_abspath.exists():
         print(f"  [PDF] ✗ HTML 文件不存在: {html_abspath}")
-        return str(output_path)
+        return None
 
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch()
             page = browser.new_page()
-            page.goto(f"file://{html_abspath}")
+            page.goto(html_abspath.as_uri(), wait_until="networkidle")
 
             # 等待 Chart.js 完成渲染
             page.wait_for_timeout(2000)
@@ -60,13 +60,17 @@ def html_to_pdf(html_path: str | Path, output_path: str | Path,
             )
             browser.close()
 
+        if not output_path.exists() or output_path.stat().st_size == 0:
+            print(f"  [PDF] ✗ Playwright 未生成有效文件: {output_path}")
+            return None
+
         size_kb = os.path.getsize(output_path) / 1024
         print(f"  [PDF] ✓ 报告已生成 (Playwright): {output_path} ({size_kb:.0f} KB)")
         return str(output_path)
 
     except Exception as e:
         print(f"  [PDF] ✗ Playwright 转换失败: {e}")
-        return str(output_path)
+        return None
 
 
 if __name__ == "__main__":

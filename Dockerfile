@@ -1,20 +1,15 @@
 FROM python:3.11-slim
 
-# 安装中文字体 + WeasyPrint 系统依赖
+# 安装中文字体；Chromium 运行依赖由 Playwright 安装
 RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-noto-cjk \
-    libpango-1.0-0 \
-    libpangocairo-1.0-0 \
-    libgdk-pixbuf-2.0-0 \
-    libffi-dev \
-    libcairo2 \
-    shared-mime-info \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+RUN python -m playwright install --with-deps chromium
 
 COPY . .
 

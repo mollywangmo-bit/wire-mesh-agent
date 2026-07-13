@@ -224,6 +224,10 @@ class Config:
     # 报告周期（由 main.py 动态设置）
     period: str = "weekly"  # "weekly" | "monthly"
 
+    # Runtime
+    output_dir: str = "/tmp"
+    run_token: Optional[str] = None
+
 
 def load_config() -> Config:
     """从环境变量加载配置"""
@@ -253,4 +257,7 @@ def load_config() -> Config:
 
         wechat2rss_url=os.getenv("WECHAT2RSS_URL"),
         wechat2rss_token=os.getenv("WECHAT2RSS_TOKEN"),
+
+        output_dir=os.getenv("OUTPUT_DIR", "/tmp"),
+        run_token=os.getenv("RUN_TOKEN"),
     )

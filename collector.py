@@ -1265,6 +1265,7 @@ class Collector:
 
         for cat_name, keywords in KEYWORD_SCAN_GROUPS:
             cat_matches = []
+            missed_keywords = []
             seen_for_cat = set()
 
             for kw in keywords:
@@ -1302,10 +1303,21 @@ class Collector:
                         cat_matches.extend(kw_lines)
                 else:
                     if show_keywords:
-                        cat_matches.append(f"  **{kw}**：本周暂无相关新闻")
+                        missed_keywords.append(kw)
 
-            section = f"### {cat_name}\n" + "\n\n".join(cat_matches) + "\n"
-            sections.append(section)
+            if show_keywords:
+                if missed_keywords:
+                    cat_matches.append(
+                        "**本类未命中关键词**："
+                        + "、".join(missed_keywords)
+                    )
+                if not cat_matches:
+                    cat_matches.append("本类无命中新闻。")
+                section = f"### {cat_name}\n" + "\n\n".join(cat_matches) + "\n"
+                sections.append(section)
+            elif cat_matches:
+                section = f"### {cat_name}\n" + "\n\n".join(cat_matches) + "\n"
+                sections.append(section)
 
         if show_keywords:
             header = (
@@ -1316,8 +1328,11 @@ class Collector:
         else:
             header = (
                 "## 11. 新闻列举\n\n"
-                "> 以下为本周采集新闻列举。\n\n"
+                "> 以下为本周命中的采集新闻列举；未命中关键词不在精简版中展示。\n\n"
             )
+
+        if not sections:
+            return header + "本周未筛选出适合精简版展示的关键词新闻。"
 
         return header + "\n".join(sections)
 

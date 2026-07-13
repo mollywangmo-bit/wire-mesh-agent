@@ -9,10 +9,14 @@
 import os
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
-from fastapi import FastAPI, BackgroundTasks
+from fastapi import FastAPI, BackgroundTasks, Header, HTTPException
+from dotenv import load_dotenv
 
 from main import run_once
+
+load_dotenv(Path(__file__).parent / ".env")
 
 app = FastAPI(title="丝网行业研究 Agent")
 
@@ -31,6 +35,17 @@ _last_monthly_run = {
 }
 
 
+def _require_run_token(authorization: str | None) -> None:
+    """保护会触发外部请求/邮件投递的接口。"""
+    expected = os.getenv("RUN_TOKEN", "")
+    if not expected:
+        raise HTTPException(status_code=503, detail="RUN_TOKEN 未配置，拒绝执行敏感操作")
+
+    scheme, _, token = (authorization or "").partition(" ")
+    if scheme.lower() != "bearer" or token != expected:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
 @app.get("/")
 def root():
     """根路径 — 部分部署平台用此做健康检查"""
@@ -42,9 +57,10 @@ def root():
 
 
 @app.post("/")
-def root_trigger(background_tasks: BackgroundTasks):
+def root_trigger(background_tasks: BackgroundTasks,
+                 authorization: str | None = Header(default=None)):
     """根路径 POST — 部分部署平台的 cron 机制发 POST /"""
-    return trigger_run(background_tasks)
+    return trigger_run(background_tasks, authorization)
 
 
 @app.get("/health")
@@ -63,7 +79,6 @@ def health():
             "server": bool(smtp_server),
             "user": bool(smtp_user),
             "password_set": bool(smtp_pass),
-            "password_len": len(smtp_pass),
             "to": bool(smtp_to),
         },
     }
@@ -72,12 +87,14 @@ def health():
 @app.get("/run/status")
 def run_status():
     """查看最近一次运行状态"""
-    return _last_run
+    return {"weekly": _last_run, "monthly": _last_monthly_run}
 
 
 @app.post("/run")
-def trigger_run(background_tasks: BackgroundTasks):
+def trigger_run(background_tasks: BackgroundTasks,
+                authorization: str | None = Header(default=None)):
     """触发完整流水线（异步执行，立即返回）"""
+    _require_run_token(authorization)
     if _last_run["status"] == "running":
         return {"status": "skipped", "reason": "流水线正在执行中，请稍后再试"}
 
@@ -103,8 +120,10 @@ def _execute_pipeline():
 
 
 @app.post("/run/monthly")
-def trigger_monthly(background_tasks: BackgroundTasks):
+def trigger_monthly(background_tasks: BackgroundTasks,
+                    authorization: str | None = Header(default=None)):
     """触发月报流水线（每月1号执行）"""
+    _require_run_token(authorization)
     if _last_monthly_run["status"] == "running":
         return {"status": "skipped", "reason": "月报流水线正在执行中，请稍后再试"}
 
@@ -130,8 +149,9 @@ def _execute_monthly_pipeline():
 
 
 @app.post("/debug/email")
-def debug_email():
+def debug_email(authorization: str | None = Header(default=None)):
     """诊断邮件配置 — 发测试邮件并返回结果"""
+    _require_run_token(authorization)
     try:
         from config import load_config
         from delivery import Delivery

@@ -26,6 +26,14 @@ SMTP_TIMEOUT = 30
 SMTP_RETRIES = 3
 
 
+def _valid_file(path: str | Path | None) -> bool:
+    """附件必须真实存在且非空，避免日志/邮件误报。"""
+    if not path:
+        return False
+    p = Path(path)
+    return p.exists() and p.is_file() and p.stat().st_size > 0
+
+
 class Delivery:
     """报告投递器"""
 
@@ -51,16 +59,19 @@ class Delivery:
         msg["To"] = cfg.email_to
 
         # 正文
-        body = report
-        if html_path and Path(html_path).exists():
-            body += (
-                f"\n\n---\n🌐 HTML 可视化报告已随附件发送，"
-                f"建议使用浏览器打开以获得最佳阅读体验。"
-            )
+        body = (
+            f"丝网行业{prefix}已生成，请查看附件。\n\n"
+            f"- Word：适合编辑和二次加工\n"
+            f"- PDF：适合打印和归档\n"
+            f"- HTML：适合浏览器可视化阅读\n\n"
+            f"正文预览：\n{report[:1200]}"
+        )
+        if len(report) > 1200:
+            body += "\n\n……完整内容请查看附件。"
         msg.attach(MIMEText(body, "plain", "utf-8"))
 
         # Word 附件
-        if docx_path and Path(docx_path).exists():
+        if _valid_file(docx_path):
             with open(docx_path, "rb") as f:
                 attachment = MIMEBase("application", "vnd.openxmlformats-officedocument.wordprocessingml.document")
                 attachment.set_payload(f.read())
@@ -73,7 +84,7 @@ class Delivery:
                 msg.attach(attachment)
 
         # PDF 附件
-        if pdf_path and Path(pdf_path).exists():
+        if _valid_file(pdf_path):
             with open(pdf_path, "rb") as f:
                 attachment = MIMEBase("application", "pdf")
                 attachment.set_payload(f.read())
@@ -86,7 +97,7 @@ class Delivery:
                 msg.attach(attachment)
 
         # HTML 附件
-        if html_path and Path(html_path).exists():
+        if _valid_file(html_path):
             with open(html_path, "rb") as f:
                 html_att = MIMEBase("text", "html")
                 html_att.set_payload(f.read())
@@ -107,11 +118,11 @@ class Delivery:
                     server.login(cfg.smtp_user, cfg.smtp_password)
                     server.send_message(msg)
                 attachments = []
-                if docx_path:
+                if _valid_file(docx_path):
                     attachments.append("Word")
-                if pdf_path:
+                if _valid_file(pdf_path):
                     attachments.append("PDF")
-                if html_path:
+                if _valid_file(html_path):
                     attachments.append("HTML")
                 suffix = f" (含{' + '.join(attachments)}附件)" if attachments else ""
                 print(f"  [邮件] ✓ 已发送至 {cfg.email_to}{suffix}")
