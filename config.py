@@ -240,7 +240,7 @@ def load_config() -> Config:
     return Config(
         llm_api_key=os.getenv("LLM_API_KEY", ""),
         llm_base_url=os.getenv("LLM_BASE_URL", "https://api.deepseek.com"),
-        llm_model=os.getenv("LLM_MODEL", "deepseek-chat"),
+        llm_model=os.getenv("LLM_MODEL", "deepseek-v4-pro"),
 
         smtp_server=os.getenv("SMTP_SERVER"),
         smtp_port=int(os.getenv("SMTP_PORT", "587")),
