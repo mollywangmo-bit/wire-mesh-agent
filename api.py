@@ -13,12 +13,16 @@ from pathlib import Path
 
 from fastapi import FastAPI, BackgroundTasks, Header, HTTPException
 from dotenv import load_dotenv
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
 
 from main import run_once
 
 load_dotenv(Path(__file__).parent / ".env")
 
 app = FastAPI(title="丝网行业研究 Agent")
+
+_scheduler = AsyncIOScheduler(timezone="Asia/Shanghai")
 
 _last_run = {
     "status": "never_run",
@@ -33,6 +37,41 @@ _last_monthly_run = {
     "finished_at": None,
     "error": None,
 }
+
+
+@app.on_event("startup")
+def start_scheduler() -> None:
+    """在应用进程内调度报告，避免平台 cron 无法携带 RUN_TOKEN。"""
+    if os.getenv("SCHEDULER_ENABLED", "true").lower() not in {"1", "true", "yes", "on"}:
+        print("[Scheduler] 已通过 SCHEDULER_ENABLED 禁用")
+        return
+
+    _scheduler.add_job(
+        _execute_pipeline,
+        CronTrigger(day_of_week="mon", hour=8, minute=0, timezone="Asia/Shanghai"),
+        id="weekly-report",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=6 * 60 * 60,
+    )
+    _scheduler.add_job(
+        _execute_monthly_pipeline,
+        CronTrigger(day=1, hour=8, minute=0, timezone="Asia/Shanghai"),
+        id="monthly-report",
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=6 * 60 * 60,
+    )
+    _scheduler.start()
+    print("[Scheduler] 已启动：周一 08:00 周报；每月1日 08:00 月报（Asia/Shanghai）")
+
+
+@app.on_event("shutdown")
+def stop_scheduler() -> None:
+    if _scheduler.running:
+        _scheduler.shutdown(wait=False)
 
 
 def _require_run_token(authorization: str | None) -> None:
@@ -75,6 +114,11 @@ def health():
         "status": "alive",
         "last_run_status": _last_run["status"],
         "last_run_at": _last_run["finished_at"],
+        "scheduler": {
+            "enabled": _scheduler.running,
+            "weekly_next_run": _next_run("weekly-report"),
+            "monthly_next_run": _next_run("monthly-report"),
+        },
         "smtp": {
             "server": bool(smtp_server),
             "user": bool(smtp_user),
@@ -82,6 +126,11 @@ def health():
             "to": bool(smtp_to),
         },
     }
+
+
+def _next_run(job_id: str) -> str | None:
+    job = _scheduler.get_job(job_id)
+    return job.next_run_time.isoformat() if job and job.next_run_time else None
 
 
 @app.get("/run/status")

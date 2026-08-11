@@ -157,6 +157,10 @@ def run_once(brief: bool = False, period: str = "weekly", also_brief: bool = Fal
     history.save()
     print(f"  历史去重库已更新: {history.path}")
 
+    failed_labels = [result.variant.label for result in run_results if not result.delivered]
+    if failed_labels:
+        raise RuntimeError(f"以下报告所有投递渠道均失败: {', '.join(failed_labels)}")
+
     print("\n" + "=" * 60)
     print(f"  全部完成（{len(versions)} 个版本）！")
     print("=" * 60)
