@@ -10,6 +10,14 @@ Make the report pipeline production-safe and easier for future agents to maintai
 
 Report content productization: full archive report vs decision briefing.
 
+## Parallel Subtask: Report Knowledge Workbench
+
+- Branch/worktree: `feature/report-knowledge-workbench` in an isolated worktree.
+- Scope: a downstream, standalone FastAPI knowledge workbench that imports archived Markdown reports.
+- Isolation: no changes to `main.py`, `api.py` schedules, collection, analysis, or delivery.
+- MVP includes: idempotent SQLite import, report browsing, keyword search, report-text signal trends, and source-cited retrieval answers.
+- Specification: `docs/specs/report-knowledge-workbench.md`.
+
 ## Completed
 
 - Replaced fragile PDF strategy with Playwright HTML → PDF.

@@ -1,0 +1,13 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY knowledge_workbench/requirements.txt /app/knowledge_workbench/requirements.txt
+RUN pip install --no-cache-dir -r /app/knowledge_workbench/requirements.txt
+
+COPY knowledge_workbench /app/knowledge_workbench
+
+ENV PORT=8080
+EXPOSE 8080
+
+CMD ["sh", "-c", "uvicorn knowledge_workbench.app:app --host 0.0.0.0 --port ${PORT:-8080}"]
