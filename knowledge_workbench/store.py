@@ -18,6 +18,15 @@ SIGNALS: dict[str, tuple[str, ...]] = {
     "regional": ("中东", "东南亚", "欧洲", "北美", "拉美", "非洲", "国内"),
 }
 
+OPPORTUNITY_THEMES: dict[str, tuple[str, ...]] = {
+    "新能源与氢能": ("氢能", "电解槽", "储氢", "新能源", "燃料电池"),
+    "高端过滤": ("过滤", "滤网", "滤材", "净化", "分离"),
+    "电子与精密制造": ("网版", "电子", "精密", "半导体", "蚀刻"),
+    "海外市场": ("出口", "海外", "欧洲", "美国", "东南亚", "中东"),
+}
+REGIONS = ("中国", "国内", "欧洲", "美国", "北美", "东南亚", "中东", "拉美", "非洲", "日本", "韩国", "印度")
+EVENT_TERMS = ("展会", "政策", "法规", "关税", "反倾销", "投产", "签约", "订单", "招标", "发布", "涨价", "降价")
+
 
 def _connect(db_path: str | Path) -> sqlite3.Connection:
     path = Path(db_path)
@@ -226,3 +235,76 @@ def dashboard_stats(db_path: str | Path) -> dict:
             "SELECT id, title, report_type, imported_at FROM reports ORDER BY imported_at DESC LIMIT 1"
         ).fetchone()
     return {"report_count": total, "latest_report": dict(latest) if latest else None}
+
+
+def _report_date(report: dict) -> str:
+    """Use the report filename date so historical imports retain chronological order."""
+    match = re.search(r"(20\d{2})[-_\s]*(\d{2})[-_\s]*(\d{2})", report["source_path"])
+    return "-".join(match.groups()) if match else "0000-00-00"
+
+
+def _reports_in_chronological_order(db_path: str | Path) -> list[dict]:
+    with _connect(db_path) as conn:
+        rows = conn.execute(
+            "SELECT id, title, report_type, source_path, content FROM reports"
+        ).fetchall()
+    return sorted((dict(row) for row in rows), key=_report_date)
+
+
+def weekly_changes(db_path: str | Path) -> dict:
+    reports = [r for r in _reports_in_chronological_order(db_path) if r["report_type"] == "weekly"]
+    if not reports:
+        return {"latest": None, "previous": None, "changes": []}
+    latest = reports[-1]
+    previous = reports[-2] if len(reports) > 1 else None
+    latest_counts = signal_counts(latest["content"])
+    previous_counts = signal_counts(previous["content"]) if previous else {}
+    changes = []
+    for signal, count in latest_counts.items():
+        delta = count - previous_counts.get(signal, 0)
+        changes.append({"signal": signal, "count": count, "delta": delta})
+    changes.sort(key=lambda item: (abs(item["delta"]), item["count"]), reverse=True)
+    return {
+        "latest": {"id": latest["id"], "title": latest["title"], "date": _report_date(latest)},
+        "previous": ({"id": previous["id"], "title": previous["title"], "date": _report_date(previous)} if previous else None),
+        "changes": changes,
+    }
+
+
+def opportunity_radar(db_path: str | Path) -> list[dict]:
+    reports = _reports_in_chronological_order(db_path)[-4:]
+    result = []
+    for theme, terms in OPPORTUNITY_THEMES.items():
+        mentions = sum(sum(report["content"].count(term) for term in terms) for report in reports)
+        sources = [report["title"] for report in reports if any(term in report["content"] for term in terms)]
+        result.append({"theme": theme, "mentions": mentions, "sources": sources})
+    return sorted(result, key=lambda item: item["mentions"], reverse=True)
+
+
+def event_timeline(db_path: str | Path, limit: int = 16) -> list[dict]:
+    events: list[dict] = []
+    for report in reversed(_reports_in_chronological_order(db_path)):
+        lines = [line.strip(" -•\t") for line in report["content"].splitlines()]
+        for line in lines:
+            if len(line) >= 16 and any(term in line for term in EVENT_TERMS):
+                events.append({"date": _report_date(report), "title": report["title"], "text": line[:220]})
+                if len(events) >= limit:
+                    return events
+    return events
+
+
+def entity_map(db_path: str | Path) -> dict:
+    reports = _reports_in_chronological_order(db_path)
+    text = "\n".join(report["content"] for report in reports)
+    regions = [{"name": region, "mentions": text.count(region)} for region in REGIONS if text.count(region)]
+    companies = re.findall(r"[\u4e00-\u9fff]{2,18}(?:股份有限公司|有限公司|集团)", text)
+    company_counts: dict[str, int] = {}
+    for company in companies:
+        company_counts[company] = company_counts.get(company, 0) + 1
+    return {
+        "regions": sorted(regions, key=lambda item: item["mentions"], reverse=True),
+        "companies": [
+            {"name": name, "mentions": count}
+            for name, count in sorted(company_counts.items(), key=lambda item: item[1], reverse=True)[:12]
+        ],
+    }
