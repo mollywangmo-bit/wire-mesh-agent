@@ -16,6 +16,7 @@ from knowledge_workbench.store import (
     dashboard_stats,
     get_report,
     import_directory,
+    import_markdown_file,
     init_db,
     list_reports,
     search_sections,
@@ -41,6 +42,11 @@ class AskRequest(BaseModel):
     question: str = Field(min_length=2, max_length=300)
 
 
+class ImportReportRequest(BaseModel):
+    filename: str = Field(min_length=4, max_length=180)
+    content: str = Field(min_length=1)
+
+
 @app.on_event("startup")
 def startup() -> None:
     init_db(DB_PATH)
@@ -52,11 +58,14 @@ def _excerpt(content: str, length: int = 220) -> str:
 
 
 def _require_admin(authorization: str | None) -> None:
-    if not ADMIN_TOKEN:
-        return
-    expected = f"Bearer {ADMIN_TOKEN}"
-    if authorization != expected:
+    if not _has_valid_admin(authorization):
         raise HTTPException(status_code=401, detail="Invalid import token")
+
+
+def _has_valid_admin(authorization: str | None) -> bool:
+    if not ADMIN_TOKEN:
+        return False
+    return hmac.compare_digest(authorization or "", f"Bearer {ADMIN_TOKEN}")
 
 
 def _auth_is_configured() -> bool:
@@ -101,6 +110,10 @@ def _login_page(error: bool = False) -> str:
 async def require_login(request: Request, call_next):
     path = request.url.path
     if path in {"/api/health", "/login", "/logout", "/favicon.ico"}:
+        return await call_next(request)
+    if path.startswith("/api/import") and _has_valid_admin(
+        request.headers.get("authorization")
+    ):
         return await call_next(request)
     if not _auth_is_configured():
         return JSONResponse(
@@ -221,6 +234,22 @@ def trends() -> list[dict]:
 def import_reports(authorization: str | None = Header(default=None)) -> dict[str, int]:
     _require_admin(authorization)
     return import_directory(DB_PATH, ARCHIVE_DIR)
+
+
+@app.post("/api/import/report")
+def import_report(
+    request: ImportReportRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, str | bool]:
+    """Store one Markdown report in the persistent archive and import it."""
+    _require_admin(authorization)
+    filename = Path(request.filename).name
+    if filename != request.filename or not filename.endswith(".md"):
+        raise HTTPException(status_code=400, detail="Only safe .md filenames are allowed.")
+    ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
+    report_path = ARCHIVE_DIR / filename
+    report_path.write_text(request.content, encoding="utf-8")
+    return {"filename": filename, "imported": import_markdown_file(DB_PATH, report_path)}
 
 
 @app.post("/api/ask")

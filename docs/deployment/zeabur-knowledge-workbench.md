@@ -29,6 +29,8 @@ WIRE_MESH_KB_SESSION_SECRET=<创建一个新的随机长令牌>
 Authorization: Bearer <WIRE_MESH_KB_ADMIN_TOKEN>
 ```
 
+也可通过 `POST /api/import/report` 以 `{ "filename": "...md", "content": "..." }` 写入单篇报告；该接口同样只接受管理令牌。
+
 ## 运行边界
 
 - 该服务不运行 APScheduler，不发送邮件，也不调用原 Agent 的运行接口。
