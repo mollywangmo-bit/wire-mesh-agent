@@ -18,6 +18,9 @@
 WIRE_MESH_KB_DB=/data/knowledge-workbench/knowledge.db
 WIRE_MESH_KB_ARCHIVE=/data/wire-mesh-reports
 WIRE_MESH_KB_ADMIN_TOKEN=<创建一个新的随机长令牌>
+WIRE_MESH_KB_AUTH_USERNAME=<团队登录账号>
+WIRE_MESH_KB_AUTH_PASSWORD=<团队登录密码>
+WIRE_MESH_KB_SESSION_SECRET=<创建一个新的随机长令牌>
 ```
 
 首次启动后，把已有 `.md` 报告上传或同步到 `/data/wire-mesh-reports`，再对工作台域名调用 `POST /api/import`。请求头为：
@@ -30,4 +33,5 @@ Authorization: Bearer <WIRE_MESH_KB_ADMIN_TOKEN>
 
 - 该服务不运行 APScheduler，不发送邮件，也不调用原 Agent 的运行接口。
 - 新服务故障不会改变现有行研 Agent 的推送节奏。
+- 未配置三项 `WIRE_MESH_KB_AUTH_*` 登录变量时，除健康检查外的访问会被拒绝。
 - 后续如要自动同步报告，另建一个可重试的归档任务，不放进主 Agent 的关键投递路径。

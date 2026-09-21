@@ -1,11 +1,15 @@
 """Independent FastAPI workbench for archived Wire Mesh research reports."""
 from __future__ import annotations
 
+import hashlib
+import hmac
 import os
+import time
+from urllib.parse import parse_qs
 from pathlib import Path
 
-from fastapi import FastAPI, Header, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Header, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from knowledge_workbench.store import (
@@ -23,6 +27,12 @@ BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = Path(os.getenv("WIRE_MESH_KB_DB", str(BASE_DIR / "knowledge.db")))
 ARCHIVE_DIR = Path(os.getenv("WIRE_MESH_KB_ARCHIVE", "/data/wire-mesh-reports"))
 ADMIN_TOKEN = os.getenv("WIRE_MESH_KB_ADMIN_TOKEN")
+AUTH_USERNAME = os.getenv("WIRE_MESH_KB_AUTH_USERNAME")
+AUTH_PASSWORD = os.getenv("WIRE_MESH_KB_AUTH_PASSWORD")
+SESSION_SECRET = os.getenv("WIRE_MESH_KB_SESSION_SECRET")
+COOKIE_SECURE = os.getenv("WIRE_MESH_KB_COOKIE_SECURE", "true").lower() == "true"
+SESSION_COOKIE = "wire_mesh_kb_session"
+SESSION_TTL_SECONDS = 8 * 60 * 60
 
 app = FastAPI(title="丝网行业研报知识库工作台", version="0.1.0")
 
@@ -47,6 +57,99 @@ def _require_admin(authorization: str | None) -> None:
     expected = f"Bearer {ADMIN_TOKEN}"
     if authorization != expected:
         raise HTTPException(status_code=401, detail="Invalid import token")
+
+
+def _auth_is_configured() -> bool:
+    return bool(AUTH_USERNAME and AUTH_PASSWORD and SESSION_SECRET)
+
+
+def _sign(value: str) -> str:
+    assert SESSION_SECRET is not None
+    return hmac.new(
+        SESSION_SECRET.encode("utf-8"), value.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+
+
+def _make_session() -> str:
+    assert AUTH_USERNAME is not None
+    expires_at = int(time.time()) + SESSION_TTL_SECONDS
+    payload = f"{AUTH_USERNAME}:{expires_at}"
+    return f"{payload}:{_sign(payload)}"
+
+
+def _has_valid_session(cookie: str | None) -> bool:
+    if not cookie or not _auth_is_configured():
+        return False
+    try:
+        username, expires_at_text, signature = cookie.rsplit(":", 2)
+        payload = f"{username}:{expires_at_text}"
+        return (
+            hmac.compare_digest(username, AUTH_USERNAME or "")
+            and hmac.compare_digest(signature, _sign(payload))
+            and int(expires_at_text) >= int(time.time())
+        )
+    except (ValueError, TypeError):
+        return False
+
+
+def _login_page(error: bool = False) -> str:
+    message = "账号或密码不正确。" if error else ""
+    return f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>登录｜丝网研报知识库</title><style>body{{margin:0;min-height:100vh;display:grid;place-items:center;background:#eef5f6;color:#102a43;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif}}main{{width:min(390px,calc(100% - 36px));background:#fff;border-radius:18px;padding:32px;box-shadow:0 18px 50px #0b728526}}h1{{font-size:24px;margin:0 0 8px}}p{{color:#627d98;line-height:1.6}}label{{display:block;margin-top:16px;font-size:14px}}input{{width:100%;box-sizing:border-box;margin-top:7px;padding:12px;border:1px solid #bcccdc;border-radius:9px;font-size:15px}}button{{margin-top:22px;width:100%;padding:12px;background:#0b7285;border:0;border-radius:9px;color:#fff;font-size:15px}}.error{{color:#c92a2a;font-size:14px}}</style></head><body><main><h1>丝网研报知识库</h1><p>请输入团队账号后访问研报、搜索与问答功能。</p><form method="post" action="/login"><label>账号<input name="username" autocomplete="username" required></label><label>密码<input name="password" type="password" autocomplete="current-password" required></label><button type="submit">登录</button></form><p class="error">{message}</p></main></body></html>"""
+
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    path = request.url.path
+    if path in {"/api/health", "/login", "/logout", "/favicon.ico"}:
+        return await call_next(request)
+    if not _auth_is_configured():
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "Login protection has not been configured."},
+        )
+    if _has_valid_session(request.cookies.get(SESSION_COOKIE)):
+        return await call_next(request)
+    if path.startswith("/api/"):
+        return JSONResponse(status_code=401, content={"detail": "Login required."})
+    return RedirectResponse(url="/login", status_code=303)
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page() -> str:
+    if not _auth_is_configured():
+        raise HTTPException(status_code=503, detail="Login protection has not been configured.")
+    return _login_page()
+
+
+@app.post("/login")
+async def login(request: Request):
+    if not _auth_is_configured():
+        raise HTTPException(status_code=503, detail="Login protection has not been configured.")
+    fields = parse_qs((await request.body()).decode("utf-8"), keep_blank_values=True)
+    username = fields.get("username", [""])[0]
+    password = fields.get("password", [""])[0]
+    if not (
+        hmac.compare_digest(username, AUTH_USERNAME or "")
+        and hmac.compare_digest(password, AUTH_PASSWORD or "")
+    ):
+        return HTMLResponse(_login_page(error=True), status_code=401)
+    response = RedirectResponse(url="/", status_code=303)
+    response.set_cookie(
+        SESSION_COOKIE,
+        _make_session(),
+        max_age=SESSION_TTL_SECONDS,
+        httponly=True,
+        secure=COOKIE_SECURE,
+        samesite="lax",
+    )
+    return response
+
+
+@app.post("/logout")
+def logout() -> RedirectResponse:
+    response = RedirectResponse(url="/login", status_code=303)
+    response.delete_cookie(SESSION_COOKIE)
+    return response
 
 
 @app.get("/", response_class=HTMLResponse)

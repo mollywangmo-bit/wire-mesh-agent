@@ -15,6 +15,9 @@ uvicorn knowledge_workbench.app:app --host 0.0.0.0 --port 8090
 WIRE_MESH_KB_DB=/persistent-volume/knowledge.db
 WIRE_MESH_KB_ARCHIVE=/persistent-volume/report-archive
 WIRE_MESH_KB_ADMIN_TOKEN=replace-with-a-secret-token
+WIRE_MESH_KB_AUTH_USERNAME=team-user
+WIRE_MESH_KB_AUTH_PASSWORD=replace-with-a-strong-password
+WIRE_MESH_KB_SESSION_SECRET=replace-with-a-long-random-secret
 ```
 
 使用 `POST /api/import` 扫描归档目录。若设置了管理令牌，请添加：
