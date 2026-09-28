@@ -26,7 +26,7 @@ from knowledge_workbench.store import (
     search_sections,
     trend_summary,
     opportunity_radar,
-    process_all_report_events,
+    rebuild_all_report_events,
     weekly_changes,
 )
 
@@ -197,7 +197,7 @@ const label={weekly:'周报',weekly_brief:'精简周报',monthly:'月报',price_
 const eventLabel={investment:'投资',capacity_expansion:'扩产',new_product:'新品',technology_breakthrough:'技术突破',customer_validation:'客户验证',order:'订单',partnership:'合作',policy:'政策',export:'出口',price_change:'价格变化',market_demand:'市场需求',regulation:'监管',other:'行业动态'};
 async function json(url,opts){const r=await fetch(url,opts);if(!r.ok)throw new Error('请求失败');return r.json()}
 function short(text,size=42){const value=String(text).replace(/\[[^\]]+\]\([^\)]+\)/g,m=>m.replace(/^\[|\]\([^\)]+\)$/g,''));return value.length>size?value.slice(0,size)+'…':value}
-function renderHotspots(items){return items.slice(0,6).map(x=>`<article class="hotspot"><h3>${esc(x.name)}</h3><div>${x.keywords.slice(0,3).map(k=>`<span class="tag">${esc(k)}</span>`).join('')}</div>${x.news.slice(0,2).map(n=>n.original_url?`<a class="news-link" href="${esc(n.original_url)}" target="_blank" rel="noopener"><span>${esc(short(n.title))}</span><span class="source-label">原文 ↗</span></a>`:`<button class="news-link" onclick="openReport('${n.report_id}')"><span>${esc(short(n.title))}</span><span class="source-label">查看研报</span></button>`).join('')}</article>`).join('')}
+function renderHotspots(items){return items.slice(0,6).map(x=>`<article class="hotspot"><h3>${esc(x.name)}</h3><div>${x.keywords.slice(0,3).map(k=>`<span class="tag">${esc(k)}</span>`).join('')}</div>${x.news.slice(0,2).map(n=>n.original_url?`<a class="news-link" href="${esc(n.original_url)}" target="_blank" rel="noopener"><span>${esc(short(n.title))}</span><span class="source-label">原文 ↗</span></a>`:`<button class="news-link" onclick="openReport('${n.report_id}')"><span>${esc(short(n.title))}</span><span class="source-label">研报证据</span></button>`).join('')}</article>`).join('')}
 function renderMap(items){const aliases={国内:'中国',北美:'美国'},totals={};items.forEach(x=>{const name=aliases[x.name]||x.name;totals[name]=(totals[name]||0)+x.mentions});const points={中国:[315,105],欧洲:[180,75],美国:[65,92],东南亚:[320,155],中东:[245,118],拉美:[105,175],非洲:[195,153],日本:[365,102],韩国:[345,105],印度:[275,140]};const values=Object.entries(totals).filter(([name])=>points[name]);const max=Math.max(1,...values.map(([,count])=>count));const bubbles=values.map(([name,count])=>{const [cx,cy]=points[name],r=10+10*count/max;return `<g><circle class="map-bubble" cx="${cx}" cy="${cy}" r="${r}"/><text class="map-count" x="${cx}" y="${cy}">${count}</text><text class="map-label" x="${cx}" y="${cy+r+14}">${esc(name)}</text></g>`}).join('');return `<svg class="map-svg" viewBox="0 0 420 220" aria-label="区域情报分布图"><line class="map-grid" x1="140" y1="15" x2="140" y2="205"/><line class="map-grid" x1="280" y1="15" x2="280" y2="205"/><line class="map-grid" x1="15" y1="110" x2="405" y2="110"/><text class="map-label" x="70" y="20">美洲</text><text class="map-label" x="210" y="20">欧洲 / 非洲</text><text class="map-label" x="350" y="20">亚洲</text>${bubbles}</svg><div class="meta">圆点中的数字为研报相关提及次数。</div>`}
 function renderCompanies(items){if(!items.length)return '暂未识别到稳定的企业实体。';const top=items.slice(0,8),max=Math.max(...top.map(x=>x.mentions));return top.map(x=>`<div class="bar-row"><div class="bar-label"><span>${esc(x.name)}</span><strong>${x.mentions}</strong></div><div class="bar-track"><div class="bar-fill" style="width:${Math.max(8,x.mentions/max*100)}%"></div></div></div>`).join('')}
 function renderEvents(events){return events.slice(0,6).map(x=>`<article class="event-card"><div class="meta">${esc(x.event_date)} · ${esc(eventLabel[x.event_type]||'行业动态')}</div><h3>${esc(x.title)}</h3><div>${x.themes.slice(0,3).map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div>${x.sources[0]?`<button class="news-link" onclick="openReport('${x.sources[0].report_id}')">查看来源研报</button>`:''}</article>`).join('')}
@@ -252,7 +252,7 @@ def trend_radar(days: int = Query(default=28, ge=7, le=365)) -> list[dict]:
 @app.post("/api/intelligence/rebuild")
 def rebuild_intelligence(authorization: str | None = Header(default=None)) -> dict[str, int]:
     _require_admin(authorization)
-    return process_all_report_events(DB_PATH)
+    return rebuild_all_report_events(DB_PATH)
 
 
 @app.get("/api/reports")
