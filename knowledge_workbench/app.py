@@ -118,7 +118,7 @@ async def require_login(request: Request, call_next):
     path = request.url.path
     if path in {"/api/health", "/login", "/logout", "/favicon.ico"}:
         return await call_next(request)
-    if path.startswith("/api/import") and _has_valid_admin(
+    if (path.startswith("/api/import") or path.startswith("/api/intelligence")) and _has_valid_admin(
         request.headers.get("authorization")
     ):
         return await call_next(request)
