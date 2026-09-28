@@ -152,6 +152,11 @@ def _make_id(value: str, length: int = 20) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:length]
 
 
+def _first_url(text: str) -> str | None:
+    match = re.search(r"https?://[^\s\)\]\>\"']+", text)
+    return match.group(0).rstrip(".,，。；;") if match else None
+
+
 def _event_date(report: dict) -> str:
     match = re.search(r"(20\d{2})[-_\s]*(\d{2})[-_\s]*(\d{2})", report["source_path"])
     return "-".join(match.groups()) if match else datetime.now(timezone.utc).date().isoformat()
@@ -448,6 +453,7 @@ def event_feed(db_path: str | Path, limit: int = 40) -> list[dict]:
         result = []
         for row in rows:
             event = dict(row)
+            event["original_url"] = _first_url(event["evidence_text"])
             event["themes"] = [x[0] for x in conn.execute("SELECT t.name FROM themes t JOIN event_themes et ON et.theme_id=t.id WHERE et.event_id=?", (event["id"],))]
             event["companies"] = [x[0] for x in conn.execute("SELECT name FROM event_companies WHERE event_id=?", (event["id"],))]
             event["regions"] = [x[0] for x in conn.execute("SELECT name FROM event_regions WHERE event_id=?", (event["id"],))]
@@ -480,7 +486,7 @@ def event_trends(db_path: str | Path, days: int = 28) -> list[dict]:
         item["evidence_strength"] = "高" if item["sources"] >= 3 else "中" if item["sources"] >= 2 else "低"
         item["keywords"] = list(THEME_RULES.get(item["name"], ()))[:4]
         with _connect(db_path) as conn:
-            news = conn.execute("""SELECT DISTINCT e.id, e.event_date, e.title,
+            news = conn.execute("""SELECT DISTINCT e.id, e.event_date, e.title, e.evidence_text,
                        MIN(es.report_id) AS report_id
                 FROM events e
                 JOIN event_themes et ON et.event_id=e.id
@@ -489,6 +495,10 @@ def event_trends(db_path: str | Path, days: int = 28) -> list[dict]:
                 WHERE t.name=? AND e.event_date>=?
                 GROUP BY e.id ORDER BY e.event_date DESC, e.created_at DESC LIMIT 3""",
                 (item["name"], recent_start)).fetchall()
-        item["news"] = [dict(entry) for entry in news]
+        item["news"] = []
+        for entry in news:
+            news_item = dict(entry)
+            news_item["original_url"] = _first_url(news_item.pop("evidence_text"))
+            item["news"].append(news_item)
         trends.append(item)
     return sorted(trends, key=lambda item: (item["recent_events"], item["growth_rate"], item["sources"]), reverse=True)
