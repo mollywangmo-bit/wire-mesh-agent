@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 import re
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterable
 
@@ -26,6 +26,21 @@ OPPORTUNITY_THEMES: dict[str, tuple[str, ...]] = {
 }
 REGIONS = ("中国", "国内", "欧洲", "美国", "北美", "东南亚", "中东", "拉美", "非洲", "日本", "韩国", "印度")
 EVENT_TERMS = ("展会", "政策", "法规", "关税", "反倾销", "投产", "签约", "订单", "招标", "发布", "涨价", "降价")
+
+EVENT_TYPES: dict[str, tuple[str, ...]] = {
+    "investment": ("投资", "投资额", "融资"), "capacity_expansion": ("扩产", "投产", "产能", "项目点火"),
+    "new_product": ("新品", "推出", "发布", "新产品"), "technology_breakthrough": ("突破", "研发", "专利"),
+    "customer_validation": ("验证", "认证", "客户导入"), "order": ("订单", "中标", "招标"),
+    "partnership": ("合作", "签约", "联合"), "policy": ("政策", "补贴"), "export": ("出口", "关税", "海外"),
+    "price_change": ("涨价", "降价", "价格"), "market_demand": ("需求", "采购", "询盘"),
+    "regulation": ("法规", "监管", "反倾销", "合规"),
+}
+THEME_RULES: dict[str, tuple[str, ...]] = {
+    "精密过滤": ("精密过滤", "过滤网", "滤网", "滤材"), "半导体过滤": ("半导体", "晶圆", "高纯过滤"),
+    "医疗金属编织": ("医疗", "镍钛", "神经介入", "编织网"), "制氢镍网": ("制氢", "电解槽", "镍网", "氢能"),
+    "精密网版": ("网版", "丝印", "电子网版"), "工业过滤": ("工业过滤", "过滤", "分离"),
+    "新能源电池网": ("电池", "光伏", "储能"), "高性能材料": ("玄武岩", "高性能纤维", "复合材料"),
+}
 
 
 def _connect(db_path: str | Path) -> sqlite3.Connection:
@@ -69,8 +84,31 @@ def init_db(db_path: str | Path) -> None:
               ON sections(report_id, position);
             CREATE INDEX IF NOT EXISTS idx_signals_name_report
               ON report_signals(signal_name, report_id);
+            CREATE TABLE IF NOT EXISTS events (
+                id TEXT PRIMARY KEY, event_date TEXT NOT NULL, detected_date TEXT NOT NULL,
+                title TEXT NOT NULL, event_summary TEXT NOT NULL, event_type TEXT NOT NULL,
+                evidence_text TEXT NOT NULL, confidence_score REAL NOT NULL,
+                relevance_to_wire_mesh TEXT NOT NULL, relevance_to_anping TEXT NOT NULL,
+                dedupe_key TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS event_sources (
+                event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+                report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+                section_id TEXT REFERENCES sections(id) ON DELETE SET NULL,
+                evidence_text TEXT NOT NULL,
+                PRIMARY KEY (event_id, report_id, section_id)
+            );
+            CREATE TABLE IF NOT EXISTS themes (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, description TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS event_themes (event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE, theme_id TEXT NOT NULL REFERENCES themes(id) ON DELETE CASCADE, PRIMARY KEY(event_id, theme_id));
+            CREATE TABLE IF NOT EXISTS event_companies (event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE, name TEXT NOT NULL, PRIMARY KEY(event_id, name));
+            CREATE TABLE IF NOT EXISTS event_regions (event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE, name TEXT NOT NULL, PRIMARY KEY(event_id, name));
+            CREATE TABLE IF NOT EXISTS processing_jobs (report_id TEXT PRIMARY KEY REFERENCES reports(id) ON DELETE CASCADE, status TEXT NOT NULL, processed_at TEXT, error TEXT);
+            CREATE INDEX IF NOT EXISTS idx_events_date_type ON events(event_date DESC, event_type);
+            CREATE INDEX IF NOT EXISTS idx_event_sources_report ON event_sources(report_id);
             """
         )
+        for name in THEME_RULES:
+            conn.execute("INSERT OR IGNORE INTO themes(id, name, description) VALUES (?, ?, ?)", (_make_id(f"theme:{name}"), name, f"{name}相关行业事件"))
         conn.execute("PRAGMA optimize")
 
 
@@ -114,6 +152,97 @@ def _make_id(value: str, length: int = 20) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()[:length]
 
 
+def _event_date(report: dict) -> str:
+    match = re.search(r"(20\d{2})[-_\s]*(\d{2})[-_\s]*(\d{2})", report["source_path"])
+    return "-".join(match.groups()) if match else datetime.now(timezone.utc).date().isoformat()
+
+
+def _event_type(text: str) -> str:
+    for event_type, terms in EVENT_TYPES.items():
+        if any(term in text for term in terms):
+            return event_type
+    return "other"
+
+
+def _companies(text: str) -> list[str]:
+    return sorted(set(re.findall(r"[\u4e00-\u9fffA-Za-z]{2,24}(?:股份有限公司|有限公司|集团)", text)))[:6]
+
+
+def _themes(text: str) -> list[str]:
+    return [name for name, terms in THEME_RULES.items() if any(term in text for term in terms)]
+
+
+def _event_candidates(heading: str, content: str) -> list[dict]:
+    chunks = [part.strip(" -•\t") for part in re.split(r"\n+|(?<=[。！？])", content)]
+    candidates = []
+    for chunk in chunks:
+        if len(chunk) < 20 or not any(term in chunk for terms in EVENT_TYPES.values() for term in terms):
+            continue
+        themes = _themes(chunk)
+        regions = [region for region in REGIONS if region in chunk]
+        candidates.append({
+            "title": chunk[:58].rstrip("，。；;"), "summary": chunk[:260], "event_type": _event_type(chunk),
+            "companies": _companies(chunk), "regions": regions, "themes": themes, "evidence": chunk,
+            "heading": heading,
+        })
+    return candidates[:8]
+
+
+def process_report_events(db_path: str | Path, report_id: str, force: bool = False) -> dict[str, int]:
+    """Extract rule-based, source-linked events for one report and merge duplicates."""
+    init_db(db_path)
+    with _connect(db_path) as conn:
+        job = conn.execute("SELECT status FROM processing_jobs WHERE report_id = ?", (report_id,)).fetchone()
+        if job and job["status"] == "success" and not force:
+            return {"created": 0, "merged": 0, "skipped": 1}
+        report = conn.execute("SELECT id, title, source_path FROM reports WHERE id = ?", (report_id,)).fetchone()
+        sections = conn.execute("SELECT id, heading, content FROM sections WHERE report_id = ?", (report_id,)).fetchall()
+        if not report:
+            raise ValueError(f"Unknown report {report_id}")
+        report_data = dict(report)
+        created = merged = 0
+        now = datetime.now(timezone.utc).isoformat()
+        try:
+            for section in sections:
+                for candidate in _event_candidates(section["heading"], section["content"]):
+                    date = _event_date(report_data)
+                    fingerprint = "|".join((candidate["event_type"], date[:7], ",".join(candidate["companies"]), ",".join(candidate["regions"]), ",".join(candidate["themes"]), candidate["title"][:24]))
+                    dedupe_key = _make_id(fingerprint)
+                    event = conn.execute("SELECT id FROM events WHERE dedupe_key = ?", (dedupe_key,)).fetchone()
+                    if event:
+                        event_id = event["id"]
+                        merged += 1
+                    else:
+                        event_id = _make_id(f"event:{dedupe_key}")
+                        relevance = "high" if candidate["themes"] else "medium"
+                        conn.execute("INSERT INTO events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (event_id, date, date, candidate["title"], candidate["summary"], candidate["event_type"], candidate["evidence"], 0.8 if candidate["companies"] else 0.6, relevance, relevance, dedupe_key, now))
+                        created += 1
+                    conn.execute("INSERT OR IGNORE INTO event_sources VALUES (?, ?, ?, ?)", (event_id, report_id, section["id"], candidate["evidence"]))
+                    for theme in candidate["themes"]:
+                        theme_id = _make_id(f"theme:{theme}")
+                        conn.execute("INSERT OR IGNORE INTO event_themes VALUES (?, ?)", (event_id, theme_id))
+                    for company in candidate["companies"]:
+                        conn.execute("INSERT OR IGNORE INTO event_companies VALUES (?, ?)", (event_id, company))
+                    for region in candidate["regions"]:
+                        conn.execute("INSERT OR IGNORE INTO event_regions VALUES (?, ?)", (event_id, region))
+            conn.execute("INSERT OR REPLACE INTO processing_jobs VALUES (?, 'success', ?, NULL)", (report_id, now))
+        except Exception as exc:
+            conn.execute("INSERT OR REPLACE INTO processing_jobs VALUES (?, 'failed', ?, ?)", (report_id, now, str(exc)))
+            raise
+    return {"created": created, "merged": merged, "skipped": 0}
+
+
+def process_all_report_events(db_path: str | Path) -> dict[str, int]:
+    with _connect(db_path) as conn:
+        report_ids = [row[0] for row in conn.execute("SELECT id FROM reports")]
+    total = {"reports": len(report_ids), "created": 0, "merged": 0, "skipped": 0}
+    for report_id in report_ids:
+        result = process_report_events(db_path, report_id)
+        for key in ("created", "merged", "skipped"):
+            total[key] += result[key]
+    return total
+
+
 def import_markdown_file(db_path: str | Path, file_path: str | Path) -> bool:
     path = Path(file_path)
     text = path.read_text(encoding="utf-8", errors="replace").strip()
@@ -153,6 +282,7 @@ def import_markdown_file(db_path: str | Path, file_path: str | Path) -> bool:
                 "INSERT INTO report_signals (report_id, signal_name, mention_count) VALUES (?, ?, ?)",
                 (report_id, name, count),
             )
+    process_report_events(db_path, report_id)
     return True
 
 
@@ -308,3 +438,45 @@ def entity_map(db_path: str | Path) -> dict:
             for name, count in sorted(company_counts.items(), key=lambda item: item[1], reverse=True)[:12]
         ],
     }
+
+
+def event_feed(db_path: str | Path, limit: int = 40) -> list[dict]:
+    with _connect(db_path) as conn:
+        rows = conn.execute("""SELECT e.*, COUNT(DISTINCT es.report_id) AS source_count
+            FROM events e LEFT JOIN event_sources es ON es.event_id=e.id
+            GROUP BY e.id ORDER BY e.event_date DESC, e.created_at DESC LIMIT ?""", (limit,)).fetchall()
+        result = []
+        for row in rows:
+            event = dict(row)
+            event["themes"] = [x[0] for x in conn.execute("SELECT t.name FROM themes t JOIN event_themes et ON et.theme_id=t.id WHERE et.event_id=?", (event["id"],))]
+            event["companies"] = [x[0] for x in conn.execute("SELECT name FROM event_companies WHERE event_id=?", (event["id"],))]
+            event["regions"] = [x[0] for x in conn.execute("SELECT name FROM event_regions WHERE event_id=?", (event["id"],))]
+            event["sources"] = [dict(x) for x in conn.execute("SELECT r.id AS report_id, r.title, s.heading FROM event_sources es JOIN reports r ON r.id=es.report_id LEFT JOIN sections s ON s.id=es.section_id WHERE es.event_id=?", (event["id"],))]
+            result.append(event)
+    return result
+
+
+def event_trends(db_path: str | Path, days: int = 28) -> list[dict]:
+    """Theme ranking from distinct events in two equal rolling windows."""
+    today = datetime.now(timezone.utc).date()
+    recent_start = (today - timedelta(days=days)).isoformat()
+    previous_start = (today - timedelta(days=days * 2)).isoformat()
+    with _connect(db_path) as conn:
+        rows = conn.execute("""SELECT t.name,
+            COUNT(DISTINCT CASE WHEN e.event_date >= ? THEN e.id END) AS recent_events,
+            COUNT(DISTINCT CASE WHEN e.event_date >= ? AND e.event_date < ? THEN e.id END) AS previous_events,
+            COUNT(DISTINCT CASE WHEN e.event_date >= ? THEN ec.name END) AS companies,
+            COUNT(DISTINCT CASE WHEN e.event_date >= ? THEN er.name END) AS regions,
+            COUNT(DISTINCT CASE WHEN e.event_date >= ? THEN es.report_id END) AS sources
+            FROM themes t JOIN event_themes et ON et.theme_id=t.id JOIN events e ON e.id=et.event_id
+            LEFT JOIN event_companies ec ON ec.event_id=e.id LEFT JOIN event_regions er ON er.event_id=e.id
+            LEFT JOIN event_sources es ON es.event_id=e.id GROUP BY t.id""", (recent_start, previous_start, recent_start, recent_start, recent_start, recent_start)).fetchall()
+    trends=[]
+    for row in rows:
+        item=dict(row); recent=item["recent_events"]; previous=item["previous_events"]
+        growth = (recent - previous) / max(previous, 1)
+        item["growth_rate"] = round(growth, 2)
+        item["status"] = "快速升温" if growth >= 1 and recent >= 2 else "明显上升" if growth >= .5 else "小幅上升" if growth > 0 else "稳定" if growth == 0 else "下降"
+        item["evidence_strength"] = "高" if item["sources"] >= 3 else "中" if item["sources"] >= 2 else "低"
+        trends.append(item)
+    return sorted(trends, key=lambda item: (item["recent_events"], item["growth_rate"], item["sources"]), reverse=True)

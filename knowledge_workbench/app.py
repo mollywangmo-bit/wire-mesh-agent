@@ -16,6 +16,8 @@ from knowledge_workbench.store import (
     dashboard_stats,
     entity_map,
     event_timeline,
+    event_feed,
+    event_trends,
     get_report,
     import_directory,
     import_markdown_file,
@@ -24,6 +26,7 @@ from knowledge_workbench.store import (
     search_sections,
     trend_summary,
     opportunity_radar,
+    process_all_report_events,
     weekly_changes,
 )
 
@@ -181,11 +184,11 @@ main{max-width:1120px;margin:auto;padding:42px 22px}header{padding:28px 30px;bac
 h2{font-size:18px;margin:0 0 14px}input{width:100%;padding:13px;border:1px solid #bcccdc;border-radius:10px;font-size:15px}button{margin-top:9px;padding:10px 14px;border:0;border-radius:9px;background:var(--brand);color:#fff;cursor:pointer;font-size:14px}.results{margin-top:14px}.item{padding:13px 0;border-bottom:1px solid var(--line)}.item:last-child{border:0}.report-link{display:block;width:100%;margin:0;padding:0;background:none;color:var(--ink);text-align:left;font-size:15px;font-weight:700}.meta{color:var(--muted);font-size:12px;margin-top:5px}.excerpt{color:#334e68;font-size:14px;line-height:1.6;margin-top:7px}.report-content{white-space:pre-wrap;color:#334e68;line-height:1.8;font-size:14px;max-height:720px;overflow:auto;padding-top:14px}.muted{color:var(--muted)}.analysis-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin-top:18px}.metric{display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-bottom:1px solid var(--line)}.metric:last-child{border:0}.up{color:#087f5b}.down{color:#c92a2a}.timeline{border-left:2px solid #9cdbd8;padding-left:13px;margin:10px 0}.timeline .meta{margin-bottom:4px}
 @media(max-width:760px){.grid,.analysis-grid{grid-template-columns:1fr}main{padding:20px 14px}header{padding:24px}h1{font-size:24px}}
 </style></head><body><main>
-<header><h1>丝网行业研报知识库工作台</h1><p class="sub">把已完成研报沉淀为可检索、可追溯的行业知识。</p><p class="notice">趋势指标基于研报文本提及，不等同于实时市场统计数据。</p></header>
+<header><h1>丝网行业情报工作台</h1><p class="sub">从行业信息中发现变化、验证趋势、识别机会。</p><p class="notice">所有趋势以独立事件计数，且可回溯至原始研报证据。</p></header>
 <section class="grid"><div class="card"><h2>知识搜索</h2><input id="search" placeholder="例如：出口关税、原材料成本、欧洲需求"><button onclick="searchReports()">搜索研报</button><div id="search-results" class="results muted">输入关键词后，可查看相关章节与出处。</div></div>
 <div class="card"><h2>AI 辅助问答</h2><input id="question" placeholder="例如：近期出口风险有哪些变化？"><button onclick="askQuestion()">基于研报回答</button><div id="answer" class="results muted">回答会附带来源片段；没有证据时会明确提示。</div></div></section>
-<section class="analysis-grid"><div class="card"><h2>本周变化</h2><p id="weekly-caption" class="muted">加载中...</p><div id="weekly-changes" class="muted"></div></div><div class="card"><h2>行业机会雷达</h2><p class="muted">近四期研报中的相关提及强度。</p><div id="radar" class="muted">加载中...</div></div></section>
-<section class="analysis-grid"><div class="card"><h2>行业事件时间线</h2><div id="timeline" class="muted">加载中...</div></div><div class="card"><h2>企业与区域地图</h2><p class="muted">基于报告正文提及，不代表市场份额或覆盖全量。</p><div id="entity-map" class="muted">加载中...</div></div></section>
+<section class="analysis-grid"><div class="card"><h2>趋势雷达</h2><p class="muted">最近 4 周相对此前 4 周的独立事件变化。</p><div id="radar" class="muted">加载中...</div></div><div class="card"><h2>企业与区域情报</h2><p class="muted">基于报告正文提及，不代表市场份额或覆盖全量。</p><div id="entity-map" class="muted">加载中...</div></div></section>
+<section class="card" style="margin-top:18px"><h2>事件流</h2><p class="muted">每个事件均附主题、实体和可回溯的报告证据。</p><div id="event-feed" class="muted">加载中...</div></section>
 <section class="card" style="margin-top:18px"><h2>历史研报</h2><p class="muted">点击报告即可查看完整内容。</p><div id="reports" class="muted">加载中...</div></section>
 <section id="reader" class="card" style="margin-top:18px;display:none"><button style="float:right;margin:0" onclick="closeReport()">关闭</button><h2 id="report-title">研报原文</h2><div id="report-meta" class="meta"></div><article id="report-content" class="report-content"></article></section>
 </main><script>
@@ -193,7 +196,7 @@ const esc=s=>String(s).replace(/[&<>\"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'
 const label={weekly:'周报',weekly_brief:'精简周报',monthly:'月报',price_cost:'成本/价格',demand:'需求',export:'出口',competition:'竞争',policy:'政策',regional:'区域'};
 async function json(url,opts){const r=await fetch(url,opts);if(!r.ok)throw new Error('请求失败');return r.json()}
 function metric(name,value,delta){const sign=delta>0?'+':'';const tone=delta>0?'up':delta<0?'down':'';return `<div class="metric"><span>${esc(name)}</span><strong class="${tone}">${value} 次 ${sign}${delta}</strong></div>`}
-async function load(){try{const [reports,changes,radar,timeline,entities]=await Promise.all([json('/api/reports'),json('/api/analysis/weekly-changes'),json('/api/analysis/opportunity-radar'),json('/api/analysis/timeline'),json('/api/analysis/entity-map')]);document.querySelector('#reports').innerHTML=reports.length?reports.map(r=>`<div class="item"><button class="report-link" onclick="openReport('${r.id}')">${esc(r.title)}</button></div>`).join(''):'尚未导入报告。';document.querySelector('#weekly-caption').textContent=changes.latest?(changes.latest.date+' 对比 '+(changes.previous?changes.previous.date:'首期报告')):'尚无周报';document.querySelector('#weekly-changes').innerHTML=changes.changes.length?changes.changes.slice(0,5).map(x=>metric(label[x.signal]||x.signal,x.count,x.delta)).join(''):'导入至少一份周报后显示。';document.querySelector('#radar').innerHTML=radar.map(x=>`<div class="metric"><span>${esc(x.theme)}<div class="meta">${esc(x.sources.slice(0,2).join('；')||'暂无提及')}</div></span><strong>${x.mentions} 次</strong></div>`).join('');document.querySelector('#timeline').innerHTML=timeline.length?timeline.map(x=>`<div class="timeline"><div class="meta">${esc(x.date)} · ${esc(x.title)}</div><div class="excerpt">${esc(x.text)}</div></div>`).join(''):'尚未检索到行业事件。';const groups=[['区域',entities.regions],['企业',entities.companies]];document.querySelector('#entity-map').innerHTML=groups.map(([title,items])=>`<div class="item"><strong>${title}</strong><div>${items.length?items.map(x=>`<span class="tag">${esc(x.name)} ${x.mentions}</span>`).join(''):'暂无识别结果'}</div></div>`).join('')}catch(e){['reports','weekly-changes','radar','timeline','entity-map'].forEach(id=>document.querySelector('#'+id).textContent='暂时无法读取数据。')}}
+async function load(){try{const [reports,radar,events,entities]=await Promise.all([json('/api/reports'),json('/api/trend-radar'),json('/api/events'),json('/api/analysis/entity-map')]);document.querySelector('#reports').innerHTML=reports.length?reports.map(r=>`<div class="item"><button class="report-link" onclick="openReport('${r.id}')">${esc(r.title)}</button></div>`).join(''):'尚未导入报告。';document.querySelector('#radar').innerHTML=radar.length?radar.map(x=>`<div class="metric"><span>${esc(x.name)}<div class="meta">${x.recent_events} 个事件 · ${x.companies} 家企业 · 证据${x.evidence_strength}</div></span><strong>${esc(x.status)}</strong></div>`).join(''):'完成事件回填后显示。';document.querySelector('#event-feed').innerHTML=events.length?events.map(x=>`<div class="timeline"><div class="meta">${esc(x.event_date)} · ${esc(x.event_type)} · ${esc(x.sources.map(s=>s.title).join('；'))}</div><strong>${esc(x.title)}</strong><div class="excerpt">${esc(x.event_summary)}</div><div>${x.themes.map(t=>`<span class="tag">${esc(t)}</span>`).join('')}${x.companies.map(c=>`<span class="tag">${esc(c)}</span>`).join('')}</div></div>`).join(''):'完成事件回填后显示。';const groups=[['区域',entities.regions],['企业',entities.companies]];document.querySelector('#entity-map').innerHTML=groups.map(([title,items])=>`<div class="item"><strong>${title}</strong><div>${items.length?items.map(x=>`<span class="tag">${esc(x.name)} ${x.mentions}</span>`).join(''):'暂无识别结果'}</div></div>`).join('')}catch(e){['reports','radar','event-feed','entity-map'].forEach(id=>document.querySelector('#'+id).textContent='暂时无法读取数据。')}}
 async function openReport(id){const reader=document.querySelector('#reader');document.querySelector('#report-title').textContent='加载报告中...';document.querySelector('#report-content').textContent='';reader.style.display='block';reader.scrollIntoView({behavior:'smooth',block:'start'});try{const report=await json('/api/reports/'+encodeURIComponent(id));document.querySelector('#report-title').textContent=report.title;document.querySelector('#report-meta').textContent=(label[report.report_type]||report.report_type)+' · '+new Date(report.imported_at).toLocaleDateString();document.querySelector('#report-content').textContent=report.content}catch(e){document.querySelector('#report-title').textContent='报告暂时无法读取。'}}
 function closeReport(){document.querySelector('#reader').style.display='none'}
 async function searchReports(){const q=document.querySelector('#search').value.trim();if(!q)return;const box=document.querySelector('#search-results');box.textContent='搜索中...';try{const data=await json('/api/search?q='+encodeURIComponent(q));box.innerHTML=data.length?data.map(x=>`<div class="item"><strong>${esc(x.title)} · ${esc(x.heading)}</strong><div class="excerpt">${esc(x.excerpt)}</div><div class="meta">${label[x.report_type]||x.report_type}</div></div>`).join(''):'没有找到相关研报片段。'}catch(e){box.textContent='搜索暂不可用。'}}
@@ -230,6 +233,22 @@ def analysis_timeline() -> list[dict]:
 @app.get("/api/analysis/entity-map")
 def analysis_entity_map() -> dict:
     return entity_map(DB_PATH)
+
+
+@app.get("/api/events")
+def events(limit: int = Query(default=40, ge=1, le=100)) -> list[dict]:
+    return event_feed(DB_PATH, limit)
+
+
+@app.get("/api/trend-radar")
+def trend_radar(days: int = Query(default=28, ge=7, le=365)) -> list[dict]:
+    return event_trends(DB_PATH, days)
+
+
+@app.post("/api/intelligence/rebuild")
+def rebuild_intelligence(authorization: str | None = Header(default=None)) -> dict[str, int]:
+    _require_admin(authorization)
+    return process_all_report_events(DB_PATH)
 
 
 @app.get("/api/reports")
