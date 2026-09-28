@@ -211,6 +211,8 @@ def _themes(text: str) -> list[str]:
 
 
 def _event_candidates(heading: str, content: str) -> list[dict]:
+    if any(label in heading for label in ("关键词扫描", "监测清单", "执行状态", "附录")):
+        return []
     lines = [line.strip() for line in content.splitlines()]
     linked_candidates: list[dict] = []
     linked_descriptions: set[str] = set()
