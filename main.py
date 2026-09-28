@@ -15,6 +15,7 @@ from pathlib import Path
 from config import load_config
 from collector import Collector
 from analyzer import Analyzer
+from article_manifest import sync_knowledge_workbench, write_article_manifest
 from delivery import Delivery
 from artifact_renderer import render_report_artifacts
 from history_store import HistoryStore
@@ -138,6 +139,22 @@ def run_once(brief: bool = False, period: str = "weekly", also_brief: bool = Fal
             )
         )
 
+    primary_result = next(
+        (result for result in run_results if result.variant.file_prefix == file_prefix),
+        run_results[0] if run_results else None,
+    )
+    article_manifest_path = None
+    if primary_result and primary_result.artifacts.md_path:
+        try:
+            article_manifest_path = write_article_manifest(
+                all_results,
+                output_dir,
+                report_filename=primary_result.artifacts.md_path.name,
+            )
+            print(f"  文章清单已写入: {article_manifest_path}")
+        except Exception as exc:
+            print(f"  [文章清单] 跳过: {exc}")
+
     manifest_path = write_manifest(
         output_dir=output_dir,
         run_id=run_id,
@@ -156,6 +173,10 @@ def run_once(brief: bool = False, period: str = "weekly", also_brief: bool = Fal
     history.record_items(all_results, used_fingerprints=used_fingerprints)
     history.save()
     print(f"  历史去重库已更新: {history.path}")
+
+    if primary_result and primary_result.artifacts.md_path and article_manifest_path:
+        if sync_knowledge_workbench(primary_result.artifacts.md_path, article_manifest_path):
+            print("  知识库同步完成")
 
     failed_labels = [result.variant.label for result in run_results if not result.delivered]
     if failed_labels:
