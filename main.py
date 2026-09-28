@@ -150,6 +150,7 @@ def run_once(brief: bool = False, period: str = "weekly", also_brief: bool = Fal
                 all_results,
                 output_dir,
                 report_filename=primary_result.artifacts.md_path.name,
+                report_text=llm_report,
             )
             print(f"  文章清单已写入: {article_manifest_path}")
         except Exception as exc:

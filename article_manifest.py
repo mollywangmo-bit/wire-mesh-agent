@@ -3,17 +3,31 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 import httpx
 
 
-def build_article_manifest(items: list, *, report_filename: str) -> dict:
+def build_article_manifest(
+    items: list,
+    *,
+    report_filename: str,
+    report_text: str | None = None,
+) -> dict:
+    cited_urls = None
+    if report_text is not None:
+        cited_urls = set(re.findall(r"https?://[^\s\)\]>\"']+", report_text))
     articles = []
     seen_urls: set[str] = set()
     for item in items:
         url = (getattr(item, "url", "") or "").strip()
-        if not url or url.startswith("/") or url in seen_urls:
+        if (
+            not url
+            or url.startswith("/")
+            or url in seen_urls
+            or (cited_urls is not None and url not in cited_urls)
+        ):
             continue
         seen_urls.add(url)
         articles.append(
@@ -29,8 +43,18 @@ def build_article_manifest(items: list, *, report_filename: str) -> dict:
     return {"report_filename": report_filename, "articles": articles}
 
 
-def write_article_manifest(items: list, output_dir: str | Path, *, report_filename: str) -> Path:
-    manifest = build_article_manifest(items, report_filename=report_filename)
+def write_article_manifest(
+    items: list,
+    output_dir: str | Path,
+    *,
+    report_filename: str,
+    report_text: str | None = None,
+) -> Path:
+    manifest = build_article_manifest(
+        items,
+        report_filename=report_filename,
+        report_text=report_text,
+    )
     path = Path(output_dir) / report_filename.replace("_report_", "_articles_").replace(".md", ".json")
     path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     return path
