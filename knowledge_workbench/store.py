@@ -478,5 +478,17 @@ def event_trends(db_path: str | Path, days: int = 28) -> list[dict]:
         item["growth_rate"] = round(growth, 2)
         item["status"] = "快速升温" if growth >= 1 and recent >= 2 else "明显上升" if growth >= .5 else "小幅上升" if growth > 0 else "稳定" if growth == 0 else "下降"
         item["evidence_strength"] = "高" if item["sources"] >= 3 else "中" if item["sources"] >= 2 else "低"
+        item["keywords"] = list(THEME_RULES.get(item["name"], ()))[:4]
+        with _connect(db_path) as conn:
+            news = conn.execute("""SELECT DISTINCT e.id, e.event_date, e.title,
+                       MIN(es.report_id) AS report_id
+                FROM events e
+                JOIN event_themes et ON et.event_id=e.id
+                JOIN themes t ON t.id=et.theme_id
+                LEFT JOIN event_sources es ON es.event_id=e.id
+                WHERE t.name=? AND e.event_date>=?
+                GROUP BY e.id ORDER BY e.event_date DESC, e.created_at DESC LIMIT 3""",
+                (item["name"], recent_start)).fetchall()
+        item["news"] = [dict(entry) for entry in news]
         trends.append(item)
     return sorted(trends, key=lambda item: (item["recent_events"], item["growth_rate"], item["sources"]), reverse=True)
