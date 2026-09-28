@@ -26,6 +26,15 @@ WIRE_MESH_KB_SESSION_SECRET=replace-with-a-long-random-secret
 Authorization: Bearer <WIRE_MESH_KB_ADMIN_TOKEN>
 ```
 
+原行研 Agent 会额外生成 `wire_mesh_articles_*.json`，其中保留采集阶段的标题、URL、来源、日期和摘要。若在原 Agent 服务设置以下变量，报告投递完成后会以 best-effort 方式同步到知识库；同步失败不会使邮件或其他投递失败：
+
+```text
+KNOWLEDGE_WORKBENCH_URL=https://wiremesh-knowledge-workbench.zeabur.app
+KNOWLEDGE_WORKBENCH_ADMIN_TOKEN=<与知识库管理员令牌一致>
+```
+
+结构化文章清单通过 `POST /api/import/articles` 导入，并作为 Event 的首选原文来源。
+
 趋势只代表研报文本的提及热度；不是价格、出口等外部市场数据的实时统计。
 
 ## Zeabur

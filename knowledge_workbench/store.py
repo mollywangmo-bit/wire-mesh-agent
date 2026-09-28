@@ -91,6 +91,22 @@ def init_db(db_path: str | Path) -> None:
                 relevance_to_wire_mesh TEXT NOT NULL, relevance_to_anping TEXT NOT NULL,
                 dedupe_key TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS articles (
+                id TEXT PRIMARY KEY, title TEXT NOT NULL, url TEXT NOT NULL UNIQUE,
+                source_type TEXT, published_date TEXT, snippet TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS report_articles (
+                report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
+                article_id TEXT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+                section_id TEXT REFERENCES sections(id) ON DELETE SET NULL,
+                PRIMARY KEY (report_id, article_id, section_id)
+            );
+            CREATE TABLE IF NOT EXISTS event_articles (
+                event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+                article_id TEXT NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+                PRIMARY KEY (event_id, article_id)
+            );
             CREATE TABLE IF NOT EXISTS event_sources (
                 event_id TEXT NOT NULL REFERENCES events(id) ON DELETE CASCADE,
                 report_id TEXT NOT NULL REFERENCES reports(id) ON DELETE CASCADE,
@@ -99,6 +115,7 @@ def init_db(db_path: str | Path) -> None:
                 source_title TEXT,
                 source_url TEXT,
                 source_type TEXT,
+                article_id TEXT REFERENCES articles(id) ON DELETE SET NULL,
                 PRIMARY KEY (event_id, report_id, section_id)
             );
             CREATE TABLE IF NOT EXISTS themes (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, description TEXT NOT NULL);
@@ -108,6 +125,8 @@ def init_db(db_path: str | Path) -> None:
             CREATE TABLE IF NOT EXISTS processing_jobs (report_id TEXT PRIMARY KEY REFERENCES reports(id) ON DELETE CASCADE, status TEXT NOT NULL, processed_at TEXT, error TEXT);
             CREATE INDEX IF NOT EXISTS idx_events_date_type ON events(event_date DESC, event_type);
             CREATE INDEX IF NOT EXISTS idx_event_sources_report ON event_sources(report_id);
+            CREATE INDEX IF NOT EXISTS idx_report_articles_report ON report_articles(report_id);
+            CREATE INDEX IF NOT EXISTS idx_event_articles_article ON event_articles(article_id);
             """
         )
         event_source_columns = {
@@ -117,6 +136,7 @@ def init_db(db_path: str | Path) -> None:
             ("source_title", "TEXT"),
             ("source_url", "TEXT"),
             ("source_type", "TEXT"),
+            ("article_id", "TEXT REFERENCES articles(id) ON DELETE SET NULL"),
         ):
             if column not in event_source_columns:
                 conn.execute(f"ALTER TABLE event_sources ADD COLUMN {column} {declaration}")
@@ -267,9 +287,22 @@ def process_report_events(db_path: str | Path, report_id: str, force: bool = Fal
                         relevance = "high" if candidate["themes"] else "medium"
                         conn.execute("INSERT INTO events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", (event_id, date, date, candidate["title"], candidate["summary"], candidate["event_type"], candidate["evidence"], 0.8 if candidate["companies"] else 0.6, relevance, relevance, dedupe_key, now))
                         created += 1
+                    article_id = None
+                    if candidate["source_url"]:
+                        article_id = _make_id(f"article:{candidate['source_url']}")
+                        conn.execute("""INSERT INTO articles
+                            (id, title, url, source_type, published_date, snippet, created_at)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT(url) DO UPDATE SET
+                              title=excluded.title,
+                              snippet=CASE WHEN length(excluded.snippet)>length(articles.snippet)
+                                           THEN excluded.snippet ELSE articles.snippet END""",
+                            (article_id, candidate["source_title"] or candidate["title"], candidate["source_url"], candidate["source_type"], date, candidate["summary"], now))
+                        conn.execute("INSERT OR IGNORE INTO report_articles VALUES (?, ?, ?)", (report_id, article_id, section["id"]))
+                        conn.execute("INSERT OR IGNORE INTO event_articles VALUES (?, ?)", (event_id, article_id))
                     conn.execute("""INSERT OR IGNORE INTO event_sources
-                        (event_id, report_id, section_id, evidence_text, source_title, source_url, source_type)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)""", (event_id, report_id, section["id"], candidate["evidence"], candidate["source_title"], candidate["source_url"], candidate["source_type"]))
+                        (event_id, report_id, section_id, evidence_text, source_title, source_url, source_type, article_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)""", (event_id, report_id, section["id"], candidate["evidence"], candidate["source_title"], candidate["source_url"], candidate["source_type"], article_id))
                     for theme in candidate["themes"]:
                         theme_id = _make_id(f"theme:{theme}")
                         conn.execute("INSERT OR IGNORE INTO event_themes VALUES (?, ?)", (event_id, theme_id))
@@ -300,12 +333,65 @@ def rebuild_all_report_events(db_path: str | Path) -> dict[str, int]:
     init_db(db_path)
     with _connect(db_path) as conn:
         conn.execute("DELETE FROM event_sources")
+        conn.execute("DELETE FROM event_articles")
+        conn.execute("DELETE FROM report_articles")
+        conn.execute("DELETE FROM articles")
         conn.execute("DELETE FROM event_themes")
         conn.execute("DELETE FROM event_companies")
         conn.execute("DELETE FROM event_regions")
         conn.execute("DELETE FROM events")
         conn.execute("DELETE FROM processing_jobs")
     return process_all_report_events(db_path)
+
+
+def import_source_articles(db_path: str | Path, articles: list[dict]) -> dict[str, int]:
+    """Import source NewsItem records and create URL-backed events directly."""
+    init_db(db_path)
+    result = {"articles": 0, "events_created": 0, "events_updated": 0, "skipped": 0}
+    now = datetime.now(timezone.utc).isoformat()
+    with _connect(db_path) as conn:
+        for article in articles:
+            url = str(article.get("url") or "").strip()
+            title = str(article.get("title") or "").strip()
+            if not url.startswith(("http://", "https://")) or not title:
+                result["skipped"] += 1
+                continue
+            snippet = str(article.get("snippet") or "").strip()
+            source = str(article.get("source") or "").strip()
+            published_date = str(article.get("date") or "")[:10]
+            if not re.fullmatch(r"20\d{2}-\d{2}-\d{2}", published_date):
+                published_date = datetime.now(timezone.utc).date().isoformat()
+            article_id = _make_id(f"article:{url}")
+            conn.execute("""INSERT INTO articles
+                (id, title, url, source_type, published_date, snippet, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(url) DO UPDATE SET title=excluded.title,
+                  source_type=excluded.source_type, published_date=excluded.published_date,
+                  snippet=excluded.snippet""",
+                (article_id, title, url, source or ("wechat" if "mp.weixin.qq.com" in url else "web"), published_date, snippet, now))
+            result["articles"] += 1
+            text = f"{title}。{snippet}"
+            dedupe_key = _make_id(f"source-article:{url}")
+            existing = conn.execute("SELECT id FROM events WHERE dedupe_key=?", (dedupe_key,)).fetchone()
+            if existing:
+                event_id = existing["id"]
+                result["events_updated"] += 1
+            else:
+                event_id = _make_id(f"event:{dedupe_key}")
+                themes = _themes(text)
+                relevance = "high" if themes else "medium"
+                conn.execute("INSERT INTO events VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (event_id, published_date, published_date, title[:90], snippet[:260] or title[:260], _event_type(text), snippet[:500] or title, 0.9, relevance, relevance, dedupe_key, now))
+                result["events_created"] += 1
+                for theme in themes:
+                    conn.execute("INSERT OR IGNORE INTO event_themes VALUES (?, ?)", (event_id, _make_id(f"theme:{theme}")))
+                for company in _companies(text):
+                    conn.execute("INSERT OR IGNORE INTO event_companies VALUES (?, ?)", (event_id, company))
+                for region in REGIONS:
+                    if region in text:
+                        conn.execute("INSERT OR IGNORE INTO event_regions VALUES (?, ?)", (event_id, region))
+            conn.execute("INSERT OR IGNORE INTO event_articles VALUES (?, ?)", (event_id, article_id))
+    return result
 
 
 def import_markdown_file(db_path: str | Path, file_path: str | Path) -> bool:
@@ -505,10 +591,12 @@ def entity_map(db_path: str | Path) -> dict:
     }
 
 
-def event_feed(db_path: str | Path, limit: int = 40) -> list[dict]:
+def event_feed(db_path: str | Path, limit: int = 40, external_only: bool = False) -> list[dict]:
+    source_filter = "WHERE EXISTS (SELECT 1 FROM event_articles linked WHERE linked.event_id=e.id)" if external_only else ""
     with _connect(db_path) as conn:
-        rows = conn.execute("""SELECT e.*, COUNT(DISTINCT es.report_id) AS source_count
+        rows = conn.execute(f"""SELECT e.*, COUNT(DISTINCT es.report_id) AS source_count
             FROM events e LEFT JOIN event_sources es ON es.event_id=e.id
+            {source_filter}
             GROUP BY e.id ORDER BY e.event_date DESC, e.created_at DESC LIMIT ?""", (limit,)).fetchall()
         result = []
         for row in rows:
@@ -517,11 +605,15 @@ def event_feed(db_path: str | Path, limit: int = 40) -> list[dict]:
             event["companies"] = [x[0] for x in conn.execute("SELECT name FROM event_companies WHERE event_id=?", (event["id"],))]
             event["regions"] = [x[0] for x in conn.execute("SELECT name FROM event_regions WHERE event_id=?", (event["id"],))]
             event["sources"] = [dict(x) for x in conn.execute("""SELECT r.id AS report_id, r.title, s.heading,
-                es.source_title, es.source_url, es.source_type
+                es.source_title, es.source_url, es.source_type, es.article_id
                 FROM event_sources es JOIN reports r ON r.id=es.report_id
                 LEFT JOIN sections s ON s.id=es.section_id WHERE es.event_id=?
                 ORDER BY es.source_url IS NULL, r.imported_at DESC""", (event["id"],))]
-            event["original_url"] = next((source["source_url"] for source in event["sources"] if source["source_url"]), None) or _first_url(event["evidence_text"])
+            event["articles"] = [dict(x) for x in conn.execute("""SELECT a.id, a.title, a.url,
+                a.source_type, a.published_date FROM event_articles ea
+                JOIN articles a ON a.id=ea.article_id WHERE ea.event_id=?
+                ORDER BY a.published_date DESC""", (event["id"],))]
+            event["original_url"] = (event["articles"][0]["url"] if event["articles"] else None) or next((source["source_url"] for source in event["sources"] if source["source_url"]), None) or _first_url(event["evidence_text"])
             result.append(event)
     return result
 
@@ -552,9 +644,8 @@ def event_trends(db_path: str | Path, days: int = 28) -> list[dict]:
         with _connect(db_path) as conn:
             news = conn.execute("""SELECT e.id, e.event_date, e.title,
                        MIN(es.report_id) AS report_id,
-                       (SELECT es2.source_url FROM event_sources es2
-                        WHERE es2.event_id=e.id AND es2.source_url IS NOT NULL
-                        ORDER BY es2.source_type='wechat' DESC LIMIT 1) AS original_url
+                       (SELECT a.url FROM event_articles ea JOIN articles a ON a.id=ea.article_id
+                        WHERE ea.event_id=e.id ORDER BY a.source_type='wechat' DESC LIMIT 1) AS original_url
                 FROM events e
                 JOIN event_themes et ON et.event_id=e.id
                 JOIN themes t ON t.id=et.theme_id

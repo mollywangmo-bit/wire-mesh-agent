@@ -15,6 +15,7 @@ from pathlib import Path
 from config import load_config
 from collector import Collector
 from analyzer import Analyzer
+from article_manifest import sync_article_manifest, write_article_manifest
 from delivery import Delivery
 from artifact_renderer import render_report_artifacts
 from history_store import HistoryStore
@@ -81,6 +82,15 @@ def run_once(brief: bool = False, period: str = "weekly", also_brief: bool = Fal
     raw_path = output_dir / f"wire_mesh_raw_data_{file_prefix}_{date_str}.txt"
     with open(raw_path, "w", encoding="utf-8") as f:
         f.write(raw_data)
+    report_filename = f"wire_mesh_{file_prefix}_report_{date_str}.md"
+    try:
+        article_manifest_path = write_article_manifest(
+            all_results, output_dir, report_filename=report_filename
+        )
+        print(f"  文章清单已写入: {article_manifest_path}")
+    except Exception as exc:
+        article_manifest_path = None
+        print(f"  [文章清单] 跳过: {exc}")
 
     # 3. 生成报告（一次 AI 分析）
     print(f"\n>>> [3/4] AI 分析生成{prefix}...")
@@ -156,6 +166,11 @@ def run_once(brief: bool = False, period: str = "weekly", also_brief: bool = Fal
     history.record_items(all_results, used_fingerprints=used_fingerprints)
     history.save()
     print(f"  历史去重库已更新: {history.path}")
+
+    if article_manifest_path:
+        synced = sync_article_manifest(article_manifest_path)
+        if synced:
+            print("  知识库文章同步完成")
 
     failed_labels = [result.variant.label for result in run_results if not result.delivered]
     if failed_labels:

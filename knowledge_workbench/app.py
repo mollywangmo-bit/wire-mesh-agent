@@ -21,6 +21,7 @@ from knowledge_workbench.store import (
     get_report,
     import_directory,
     import_markdown_file,
+    import_source_articles,
     init_db,
     list_reports,
     search_sections,
@@ -52,6 +53,20 @@ class AskRequest(BaseModel):
 class ImportReportRequest(BaseModel):
     filename: str = Field(min_length=4, max_length=180)
     content: str = Field(min_length=1)
+
+
+class SourceArticle(BaseModel):
+    title: str = Field(min_length=1, max_length=500)
+    url: str = Field(min_length=8, max_length=2000)
+    snippet: str = Field(default="", max_length=6000)
+    source: str = Field(default="", max_length=300)
+    date: str = Field(default="", max_length=30)
+    category: str = Field(default="", max_length=200)
+
+
+class ArticleManifestRequest(BaseModel):
+    report_filename: str = Field(default="", max_length=300)
+    articles: list[SourceArticle]
 
 
 @app.on_event("startup")
@@ -200,8 +215,8 @@ function short(text,size=42){const value=String(text).replace(/\[[^\]]+\]\([^\)]
 function renderHotspots(items){return items.slice(0,6).map(x=>`<article class="hotspot"><h3>${esc(x.name)}</h3><div>${x.keywords.slice(0,3).map(k=>`<span class="tag">${esc(k)}</span>`).join('')}</div>${x.news.slice(0,2).map(n=>n.original_url?`<a class="news-link" href="${esc(n.original_url)}" target="_blank" rel="noopener"><span>${esc(short(n.title))}</span><span class="source-label">原文 ↗</span></a>`:`<button class="news-link" onclick="openReport('${n.report_id}')"><span>${esc(short(n.title))}</span><span class="source-label">研报证据</span></button>`).join('')}</article>`).join('')}
 function renderMap(items){const aliases={国内:'中国',北美:'美国'},totals={};items.forEach(x=>{const name=aliases[x.name]||x.name;totals[name]=(totals[name]||0)+x.mentions});const points={中国:[315,105],欧洲:[180,75],美国:[65,92],东南亚:[320,155],中东:[245,118],拉美:[105,175],非洲:[195,153],日本:[365,102],韩国:[345,105],印度:[275,140]};const values=Object.entries(totals).filter(([name])=>points[name]);const max=Math.max(1,...values.map(([,count])=>count));const bubbles=values.map(([name,count])=>{const [cx,cy]=points[name],r=10+10*count/max;return `<g><circle class="map-bubble" cx="${cx}" cy="${cy}" r="${r}"/><text class="map-count" x="${cx}" y="${cy}">${count}</text><text class="map-label" x="${cx}" y="${cy+r+14}">${esc(name)}</text></g>`}).join('');return `<svg class="map-svg" viewBox="0 0 420 220" aria-label="区域情报分布图"><line class="map-grid" x1="140" y1="15" x2="140" y2="205"/><line class="map-grid" x1="280" y1="15" x2="280" y2="205"/><line class="map-grid" x1="15" y1="110" x2="405" y2="110"/><text class="map-label" x="70" y="20">美洲</text><text class="map-label" x="210" y="20">欧洲 / 非洲</text><text class="map-label" x="350" y="20">亚洲</text>${bubbles}</svg><div class="meta">圆点中的数字为研报相关提及次数。</div>`}
 function renderCompanies(items){if(!items.length)return '暂未识别到稳定的企业实体。';const top=items.slice(0,8),max=Math.max(...top.map(x=>x.mentions));return top.map(x=>`<div class="bar-row"><div class="bar-label"><span>${esc(x.name)}</span><strong>${x.mentions}</strong></div><div class="bar-track"><div class="bar-fill" style="width:${Math.max(8,x.mentions/max*100)}%"></div></div></div>`).join('')}
-function renderEvents(events){return events.slice(0,6).map(x=>`<article class="event-card"><div class="meta">${esc(x.event_date)} · ${esc(eventLabel[x.event_type]||'行业动态')}</div><h3>${esc(x.title)}</h3><div>${x.themes.slice(0,3).map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div>${x.sources[0]?`<button class="news-link" onclick="openReport('${x.sources[0].report_id}')">查看来源研报</button>`:''}</article>`).join('')}
-async function load(){try{const [reports,radar,events,entities]=await Promise.all([json('/api/reports'),json('/api/trend-radar'),json('/api/events'),json('/api/analysis/entity-map')]);document.querySelector('#reports').innerHTML=reports.length?reports.map(r=>`<div class="item"><button class="report-link" onclick="openReport('${r.id}')">${esc(r.title)}</button></div>`).join(''):'尚未导入报告。';document.querySelector('#radar').innerHTML=radar.length?renderHotspots(radar):'暂无热点板块。';document.querySelector('#region-map').innerHTML=renderMap(entities.regions);document.querySelector('#company-chart').innerHTML=renderCompanies(entities.companies);document.querySelector('#recent-events').innerHTML=events.length?renderEvents(events):'暂无近期动态。'}catch(e){['reports','radar','region-map','company-chart','recent-events'].forEach(id=>document.querySelector('#'+id).textContent='暂时无法读取数据。')}}
+function renderEvents(events){return events.slice(0,6).map(x=>`<article class="event-card"><div class="meta">${esc(x.event_date)} · ${esc(eventLabel[x.event_type]||'行业动态')}</div><h3>${esc(x.title)}</h3><div>${x.themes.slice(0,3).map(t=>`<span class="tag">${esc(t)}</span>`).join('')}</div><a class="news-link" href="${esc(x.original_url)}" target="_blank" rel="noopener"><span>打开新闻原文</span><span class="source-label">↗</span></a></article>`).join('')}
+async function load(){try{const [reports,radar,events,entities]=await Promise.all([json('/api/reports'),json('/api/trend-radar'),json('/api/events?external_only=true'),json('/api/analysis/entity-map')]);document.querySelector('#reports').innerHTML=reports.length?reports.map(r=>`<div class="item"><button class="report-link" onclick="openReport('${r.id}')">${esc(r.title)}</button></div>`).join(''):'尚未导入报告。';document.querySelector('#radar').innerHTML=radar.length?renderHotspots(radar):'暂无热点板块。';document.querySelector('#region-map').innerHTML=renderMap(entities.regions);document.querySelector('#company-chart').innerHTML=renderCompanies(entities.companies);document.querySelector('#recent-events').innerHTML=events.length?renderEvents(events):'暂无近期动态。'}catch(e){['reports','radar','region-map','company-chart','recent-events'].forEach(id=>document.querySelector('#'+id).textContent='暂时无法读取数据。')}}
 async function openReport(id){const reader=document.querySelector('#reader');document.querySelector('#report-title').textContent='加载报告中...';document.querySelector('#report-content').textContent='';reader.style.display='block';reader.scrollIntoView({behavior:'smooth',block:'start'});try{const report=await json('/api/reports/'+encodeURIComponent(id));document.querySelector('#report-title').textContent=report.title;document.querySelector('#report-meta').textContent=(label[report.report_type]||report.report_type)+' · '+new Date(report.imported_at).toLocaleDateString();document.querySelector('#report-content').textContent=report.content}catch(e){document.querySelector('#report-title').textContent='报告暂时无法读取。'}}
 function closeReport(){document.querySelector('#reader').style.display='none'}
 async function runResearch(){const q=document.querySelector('#research-input').value.trim();if(!q)return;const box=document.querySelector('#research-results');box.textContent='正在检索研报并组织回答...';try{const [answer,matches]=await Promise.all([json('/api/ask',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q})}),json('/api/search?q='+encodeURIComponent(q))]);const sources=(answer.sources||[]).length?answer.sources:matches.slice(0,5);box.innerHTML=`<div class="answer-box"><strong>结论</strong><div class="excerpt">${esc(answer.answer)}</div></div><div class="evidence-list"><strong>相关原文</strong>${sources.map(s=>`<button class="evidence-link" onclick="openReport('${s.report_id}')">${esc(s.title)} · ${esc(s.heading)}</button>`).join('')||'<div class="meta">没有找到相关证据。</div>'}</div>`}catch(e){box.textContent='搜索暂不可用。'}}
@@ -240,8 +255,11 @@ def analysis_entity_map() -> dict:
 
 
 @app.get("/api/events")
-def events(limit: int = Query(default=40, ge=1, le=100)) -> list[dict]:
-    return event_feed(DB_PATH, limit)
+def events(
+    limit: int = Query(default=40, ge=1, le=100),
+    external_only: bool = Query(default=False),
+) -> list[dict]:
+    return event_feed(DB_PATH, limit, external_only=external_only)
 
 
 @app.get("/api/trend-radar")
@@ -301,6 +319,15 @@ def import_report(
     report_path = ARCHIVE_DIR / filename
     report_path.write_text(request.content, encoding="utf-8")
     return {"filename": filename, "imported": import_markdown_file(DB_PATH, report_path)}
+
+
+@app.post("/api/import/articles")
+def import_articles(
+    request: ArticleManifestRequest,
+    authorization: str | None = Header(default=None),
+) -> dict[str, int]:
+    _require_admin(authorization)
+    return import_source_articles(DB_PATH, [article.model_dump() for article in request.articles])
 
 
 @app.post("/api/ask")
